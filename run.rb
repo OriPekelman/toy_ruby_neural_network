@@ -10,6 +10,7 @@ options = {
   hidden_size: 4,
   latent_size: 2,
   num_tokens: 4,
+  batch_size: 32,
 }
 
 parser = OptionParser.new
@@ -20,6 +21,7 @@ parser.on("--prompt PROMPT") { |o| options[:prompt] = o }
 parser.on("--hidden_size HIDDEN_SIZE", Integer) { |o| options[:hidden_size] = o }
 parser.on("--latent_size LATENT_SIZE", Integer) { |o| options[:latent_size] = o }
 parser.on("--num_tokens TOKENS", Integer) { |o| options[:num_tokens] = o }
+parser.on("--batch_size BATCH_SIZE", Integer) { |o| options[:batch_size] = o }
 parser.parse!(into: options)
 
 nn_file_name = "#{options[:corpus]}_#{options[:hidden_size]}_#{options[:latent_size]}_#{options[:epochs]}.dat"
@@ -36,7 +38,7 @@ else
 
   nn, vectors = NeuralNetwork.create_from_data(data, options[:hidden_size], options[:latent_size])
 
-  nn.train(vectors, options[:epochs], options[:learning_rate])
+  nn.train(vectors, options[:epochs], options[:learning_rate], batch_size: options[:batch_size])
   nn.save_to_file(nn_file_name)
 end
 

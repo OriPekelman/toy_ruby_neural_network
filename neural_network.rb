@@ -313,23 +313,34 @@ class NeuralNetwork
   # The learning rate is a hyperparameter that controls how much the model's weights are adjusted in
   # response to the estimated error each time the model weights are updated.
   # Each epoch is an iteration over the entire dataset. Will increase training time linearly.
-  def train(inputs, epochs, learning_rate)
-    puts "Training: #{epochs} epochs, learning rate: #{learning_rate}"
+
+  def train(inputs, epochs, learning_rate, batch_size: 32, method: :mini_batch)
+    puts "Training using #{method.to_s.gsub("_", " ").capitalize}"
+    puts "Epochs: #{epochs}, Learning rate: #{learning_rate}, Batch size: #{batch_size}"
     total_start_time = Time.now
     epochs.times do |epoch|
-      epoch_start_time = Time.now
-      inputs.each do |input|
-        output, _, _ = forward(input)
-        error = Matrix.column_vector(input) - output
-        update_weights(input, error, learning_rate)
+      case method
+      when :sgd
+        inputs.each { |input| train_single_input(input, learning_rate) }
+      when :batch
+        train_batch(inputs, learning_rate)
+      when :mini_batch
+        train_mini_batch(inputs, learning_rate, batch_size)
       end
-      epoch_end_time = Time.now
-      epoch_duration = epoch_end_time - epoch_start_time
-      puts "Epoch #{epoch + 1}/#{epochs} completed in #{epoch_duration.round(2)} seconds"
+      total_end_time = Time.now
+      total_duration = total_end_time - total_start_time
+      puts "\nTraining completed in #{total_duration.round(2)} seconds"
     end
-    total_end_time = Time.now
-    total_duration = total_end_time - total_start_time
-    puts "\nTraining completed in #{total_duration.round(2)} seconds"
+  end
+
+  def train_single_input(input, learning_rate)
+    output, _, _ = forward(input)
+    error = Matrix.column_vector(input) - output
+    update_weights(input, error, learning_rate)
+  end
+
+  def train_batch(inputs, learning_rate)
+    train_mini_batch(inputs, learning_rate, inputs.size)
   end
 
   def update_weights(input, error, learning_rate)
@@ -571,6 +582,17 @@ class NeuralNetwork
   end
 
   private
+
+  def train_mini_batch(inputs, learning_rate, batch_size)
+    inputs.each_slice(batch_size) do |batch|
+      total_error = Matrix.zero(inputs.first.size, 1)
+      batch.each do |input|
+        output, _, _ = forward(input)
+        total_error += Matrix.column_vector(input) - output
+      end
+      update_weights(batch.last, total_error / batch.size, learning_rate)
+    end
+  end
 
   # relu is f(x) = max(0, x)
   # and its derivative is:

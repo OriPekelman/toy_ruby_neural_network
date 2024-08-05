@@ -38,6 +38,13 @@ Run `ruby run.rb` with optional parameters:
  ruby run.rb --epochs 20 --learning_rate 0.005 --hidden_size 8 --latent_size 4 --corpus minimal --prompt="un" --num_tokens 2
 ```
 
+## Training Methods
+The model supports three training methods:
+- Stochastic Gradient Descent (SGD): Updates weights after each input (batch_size = 1)
+- Mini-batch Gradient Descent: Updates weights after processing a small batch of inputs (1 < batch_size < dataset size)
+- Batch Gradient Descent: Updates weights after processing the entire dataset (batch_size = dataset size)
+
+The batch size can be controlled via the --batch_size command-line option.
 ## Requirements
 - Ruby 3.x
 
