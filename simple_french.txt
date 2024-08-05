@@ -1,0 +1,286 @@
+Je mange une pomme
+Tu bois du café
+Il lit un livre
+Elle écoute de la musique
+Nous parlons français
+Vous regardez la télévision
+Ils jouent au football
+J'aime le chocolat
+Tu préfères les chats
+Il déteste le lundi
+Elle adore les fleurs
+Nous aimons voyager
+Vous étudiez l'histoire
+Ils travaillent ensemble
+Je vais au cinéma
+Tu viens de Paris
+Il part en vacances
+Elle revient demain
+Nous restons à la maison
+Vous sortez ce soir
+Ils rentrent tard
+Je prends le train
+Tu fais du sport
+Il écrit un roman
+Elle peint un tableau
+Nous chantons une chanson
+Vous dansez le tango
+Ils cuisinent un gâteau
+J'achète des légumes
+Tu vends ta voiture
+Il gagne un prix
+Elle perd ses clés
+Nous trouvons un trésor
+Vous cherchez un emploi
+Ils attendent le bus
+Je commence un nouveau projet
+Tu finis ton devoir
+Il choisit un cadeau
+Elle réussit son examen
+Nous grandissons ensemble
+Vous vieillissez bien
+Ils maigrissent rapidement
+Je me lève tôt
+Tu te couches tard
+Il se lave les mains
+Elle se maquille
+Nous nous promenons dans le parc
+Vous vous reposez sur la plage
+Ils s'amusent à la fête
+J'apprends le japonais
+Tu comprends la leçon
+Il surprend tout le monde
+Elle prend une décision
+Nous entreprenons un voyage
+Vous apprenez à conduire
+Ils reprennent leurs études
+Je connais cette ville
+Tu reconnais cette chanson
+Il paraît fatigué
+Elle disparaît dans la foule
+Nous apparaissons sur scène
+Vous disparaissez rapidement
+Ils comparaissent devant le juge
+Je cours tous les matins
+Tu dors profondément
+Il meurt de faim
+Elle acquiert de l'expérience
+Nous recevons des invités
+Vous concevez un plan
+Ils déçoivent leurs parents
+Je crois en toi
+Tu vois l'avenir
+Il prévoit la pluie
+Elle revoit ses amis
+Nous entrevoyons une solution
+Vous revoyez vos leçons
+Ils entrevoient des difficultés
+Je peux t'aider
+Tu veux du thé
+Il doit partir
+Elle sait la vérité
+Nous devons travailler
+Vous pouvez rester
+Ils veulent danser
+Je mets mon manteau
+Tu promets de venir
+Il commet une erreur
+Elle admet ses torts
+Nous permettons la fête
+Vous soumettez un dossier
+Ils transmettent un message
+Je ris de la blague
+Tu souris à la caméra
+Il nourrit le chat
+Elle fleurit au printemps
+Nous réfléchissons à l'avenir
+Vous réussissez l'examen
+Ils construisent une maison
+Je traduis un texte
+Tu conduis prudemment
+Il produit du vin
+Crois-moi
+Rappelle-moi
+Dès que possible
+Fais-moi une faveur
+Donne-moi un coup de main
+je ne comprends pas
+je ne le pense pas
+Je refuse!
+Je suis au régime
+je viens de le faire
+Je suis désolé
+Absolument pas
+Je n'ai aucune idée
+Je suis d'accord
+Je suis à la maison
+C'est sur le bout de ma langue
+C'est bon
+ça prend vraiment du temps
+C'est pour le meilleur
+Non, je ne veux pas
+À bientôt
+À la prochaine
+Moi aussi
+Comme ci comme ça
+Autorise moi
+N'importe quel jour fera l'affaire
+Sois calme
+Fais attention!
+Soyez silencieux!
+Réconforter!
+Allez
+Ne sois pas ridicule
+Ne sois pas si enfantin
+Ne bougez pas !
+Ne t'inquiète pas
+Amusez-vous bien
+Suivez-moi
+Pardonne-moi
+Oublie
+que Dieu te bénisse
+C'est très attentionné de votre part
+C'est à vous
+Ce n'est pas votre affaire
+Tais-toi
+Ralentir
+Arrête de faire un tel bruit
+tu vas trop vite
+Viens avec moi
+Bon après-midi
+Bonjour
+Bonne nuit
+Bon voyage
+Bon week-end
+Je vous admire
+Je m'excuse
+je ne peux pas attendre
+je n'ai pas le temps
+J'ai compris
+Je te déteste!
+J'espère
+Je le savais
+Je vous aime
+J'aimerais bien
+Je suis occupé
+Je suis fatigué
+Je ne suis pas d'accord
+Tu gaspille mon temps
+Je me sens mieux
+Ils s'aiment
+Je suis désolé
+Je vais bien
+Ce n'est pas grave
+Rejoins moi
+Rattrapons-nous !
+Faisons le
+Ravi de vous rencontrer
+Pas encore
+Je te parle demain
+Merci beaucoup
+Ton tour
+Une belle journée, n'est-ce pas ?
+Dois-je?
+Puis-je vous aider?
+Comment vont les choses?
+Rien d'autre?
+Est-ce que vous plaisantez?
+Es-tu sûr?
+Me comprenez-vous?
+As tu fini?
+Puis-je te demander quelque chose?
+Pouvez-vous répéter?
+As-tu compris?
+As-tu besoin de quelque chose?
+Comment ca va?
+Comment vous sentez-vous?
+Combien ça coûte?
+Quel âge as-tu?
+Comment c'est passé ton week-end?
+Est-ce que tout va bien ?
+Est-ce que tout va bien?
+Qu'est-ce que tu fais?
+De quoi parles-tu?
+Que fais-tu?
+Quels sont vos loisirs?
+Qu'est-ce que vous avez dit?
+De quoi avez-vous besoin?
+Qu'est-ce que tu penses?
+Qu'est-ce que tu veux faire?
+Qu'est-ce que vous voulez?
+Quel temps fait-il?
+Quelle est votre adresse e-mail?
+Quel est votre travail?
+Quel est ton nom?
+Quel est ton numéro de téléphone?
+Que se passe-t-il?
+Quand part le train ?
+Comment puis-je me rendre au centre-ville ?
+D'où viens-tu?
+Où allez-vous?
+Où es-tu?
+Où l'avez-vous obtenu?
+Où habites-tu?
+Viens-tu avec moi?
+Combien de temps resteras-tu?
+Je me réveille tôt le matin
+Elle prépare le petit-déjeuner
+Nous allons travailler en voiture
+Ils prennent le métro tous les jours
+Tu préfères marcher jusqu'au bureau
+Je déjeune avec mes collègues
+Elle fait une pause café à 11h
+Nous avons une réunion importante cet après-midi
+Vous terminez le travail à 18h
+Ils font du sport après le bureau
+Je cuisine le dîner pour ma famille
+Tu regardes la télévision le soir
+Il lit un livre avant de dormir
+Nous aimons sortir le week-end
+Vous faites les courses le samedi matin
+Ils nettoient la maison le dimanche
+J'adore voyager pendant les vacances
+Elle apprend une nouvelle langue
+Nous essayons de nouvelles recettes
+Tu joues d'un instrument de musique
+Il fait du bénévolat le week-end
+Nous économisons pour acheter une maison
+Vous planifiez votre retraite
+Ils investissent dans la bourse
+Je rêve de devenir entrepreneur
+Elle veut changer de carrière
+Nous cherchons un nouvel appartement
+Tu as besoin d'une nouvelle voiture
+Il souhaite adopter un chien
+Nous voulons avoir des enfants
+Vous pensez déménager à l'étranger
+Ils espèrent gagner à la loterie
+Je crois en l'importance de l'éducation
+Elle soutient les causes environnementales
+Nous participons à des manifestations pacifiques
+Tu votes aux élections
+Il s'intéresse à la politique locale
+Nous suivons l'actualité internationale
+Vous recyclez vos déchets
+Ils utilisent des énergies renouvelables
+Je mange des aliments biologiques
+Elle fait son propre compost
+Nous réduisons notre consommation de plastique
+Tu achètes des produits locaux
+Il préfère les transports en commun
+Nous partageons une voiture pour aller au travail
+Vous réparez vos objets cassés
+Ils donnent leurs vêtements usagés
+Je pratique la méditation tous les jours
+Elle fait du yoga le matin
+Nous allons courir dans le parc
+Tu fais de la musculation à la salle de sport
+Il nage à la piscine municipale
+Nous jouons au tennis le week-end
+Vous faites du vélo pour aller au travail
+Ils participent à un marathon
+Je mange équilibré
+Elle suit un régime végétarien
+Nous limitons notre consommation de sucre
+Tu bois beaucoup d'eau
+Il évite les aliments transformés
