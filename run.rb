@@ -1,5 +1,6 @@
 require "optparse"
 require_relative "neural_network"
+require "benchmark"
 
 options = {
   epochs: 10,
@@ -39,6 +40,22 @@ else
   nn.save_to_file(nn_file_name)
 end
 
-puts "\nCompletion for prompt: '#{options[:prompt]}'"
+# Display model size information
+size_info = nn.model_size
+puts "\nModel Size Information:"
+puts "Total Parameters: #{size_info[:parameters]}"
+puts "Memory Footprint: #{size_info[:memory_kb]} KB"
+puts "Layer Dimensions:"
+size_info[:layers].each do |layer, size|
+  puts "  #{layer}: #{size}"
+end
+
 # the other option :deterministic is not very interesting.
-puts nn.generate_completion(options[:prompt], options[:num_tokens], :probabilistic)
+
+puts "\nCompletion for prompt: '#{options[:prompt]}'"
+generation_time = Benchmark.measure do
+  completion = nn.generate_completion(options[:prompt], options[:num_tokens], :probabilistic)
+  puts completion
+end
+
+puts "Generation time: #{generation_time.real.round(4)} seconds"

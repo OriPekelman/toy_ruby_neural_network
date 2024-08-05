@@ -315,15 +315,21 @@ class NeuralNetwork
   # Each epoch is an iteration over the entire dataset. Will increase training time linearly.
   def train(inputs, epochs, learning_rate)
     puts "Training: #{epochs} epochs, learning rate: #{learning_rate}"
-    epochs.times do
-      print "."
+    total_start_time = Time.now
+    epochs.times do |epoch|
+      epoch_start_time = Time.now
       inputs.each do |input|
         output, _, _ = forward(input)
         error = Matrix.column_vector(input) - output
         update_weights(input, error, learning_rate)
       end
+      epoch_end_time = Time.now
+      epoch_duration = epoch_end_time - epoch_start_time
+      puts "Epoch #{epoch + 1}/#{epochs} completed in #{epoch_duration.round(2)} seconds"
     end
-    puts "\nTraining completed"
+    total_end_time = Time.now
+    total_duration = total_end_time - total_start_time
+    puts "\nTraining completed in #{total_duration.round(2)} seconds"
   end
 
   def update_weights(input, error, learning_rate)
@@ -533,6 +539,35 @@ class NeuralNetwork
     end
     puts "Network loaded from #{filename}"
     nn
+  end
+
+  # for our amusement its interesrting to have some model size
+  # indications here.
+  def model_size
+    # Calculate number of parameters
+    param_count = @weights_input_to_hidden.row_count * @weights_input_to_hidden.column_count +
+                  @weights_hidden_to_latent.row_count * @weights_hidden_to_latent.column_count +
+                  @weights_latent_to_hidden.row_count * @weights_latent_to_hidden.column_count +
+                  @weights_hidden_to_output.row_count * @weights_hidden_to_output.column_count +
+                  @weights_attention.row_count * @weights_attention.column_count
+
+    # Calculate memory footprint (assuming 4 bytes per float)
+    memory_bytes = param_count * 4
+
+    # Layer dimensions
+    layers = {
+      input: @input_size,
+      hidden1: @hidden_size,
+      latent: @latent_size,
+      hidden2: @hidden_size,
+      output: @input_size,
+    }
+
+    {
+      parameters: param_count,
+      memory_kb: (memory_bytes / 1024.0).round(2),
+      layers: layers,
+    }
   end
 
   private

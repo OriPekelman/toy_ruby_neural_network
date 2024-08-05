@@ -15,8 +15,14 @@ This is probably the slowest thing on earth. There was a time, a while ago when 
 - Word embedding
 - Autoencoder architecture
 - Text generation
+  
+## Model Characteristics
 
-Some parts of neural_network.rb are very heavily documented.
+- Processes single inputs (sentences/phrases) independently
+- Uses a simple attention mechanism to focus on different parts of the input
+- Creates a compressed latent representation of each input
+
+Some parts of neural_network.rb are heavily documented  - others will probably be at some poinr.
 
 ## Usage
 Run `ruby run.rb` with optional parameters:
