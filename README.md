@@ -1,51 +1,87 @@
-# Toy Neural Network Implementation in Ruby with 0 dependencies
+# Toy neural networks in pure Ruby
 
-This is  an auto-encoder style NN implementation, in Ruby with 0 depenedecies. This is for my own education only. But learning in public is better.
+Two from-scratch implementations, no dependencies beyond the Ruby standard
+library. The whole point is to be readable: you should be able to follow how
+backpropagation works by reading the code top to bottom.
 
-This project implements a simple neural network for processing and generating Mostly French text. Well, my tokenizer has just a couple of somewhat French specificities. Hardly.
+## What's in here
 
-If it has already been trained with a specific text file and hyper parametersit will cache the model (with a *.dat file). 
+| File | Lines | What it is |
+|---|---:|---|
+| `transformer.rb` | ~880 | Decoder-only Transformer LM with multi-head attention, RMSNorm, residuals, FFN, KV cache, Adam |
+| `neural_network.rb` | ~380 | Simple autoencoder — useful as a minimal backprop teaching example |
+| `tokenizer.rb` | ~30 | Word-level French tokenizer (handles `c'est`, `aujourd'hui`, etc.) |
+| `run.rb` | ~110 | CLI driver |
+| `test_gradients.rb` | ~110 | Numerical gradient check against the transformer's analytic backward |
 
-The text file for training is expected to be simple text with newlines.
+The transformer is the main thing. The autoencoder is preserved because its
+single forward + backward pass is the simplest possible illustration of
+gradient accumulation — the same accumulator pattern then carries over to the
+transformer.
 
-This is probably the slowest thing on earth. There was a time, a while ago when there were very robust numerical and matrix operations libs in Ruby. But it seems that time has passed?  I only briefly looked. At any rate 0 dependecies is cool :). Even from StdLib we are hardly using anything .. basically `matrix` (oh welll and `optparse`).
+## Architecture (transformer)
 
-## Features
-- Text tokenization
-- Word embedding
-- Autoencoder architecture
-- Text generation
-  
-## Model Characteristics
+```
+token_ids ─▶ embed ─▶ [Block]×N ─▶ RMSNorm ─▶ LM head ─▶ logits
 
-- Processes single inputs (sentences/phrases) independently
-- Uses a simple attention mechanism to focus on different parts of the input
-- Creates a compressed latent representation of each input
+Block (pre-norm):
+    x ─▶ RMSNorm ─▶ multi-head self-attention (Q,K,V,O, causal mask) ─▶ + ─┐
+                                                                           │
+                                                       residual ◀──────────┘
+    x'─▶ RMSNorm ─▶ FFN (Linear → ReLU → Linear) ─▶ + ─┐
+                                                       │
+                                  residual ◀───────────┘
+```
 
-Some parts of neural_network.rb are heavily documented  - others will probably be at some poinr.
+Modern bits included: pre-norm, RMSNorm (LLaMA-style, simpler than LayerNorm),
+multi-head attention with per-head Q/K/V projections, causal masking, residual
+connections, learned positional embeddings, cross-entropy loss with the
+combined softmax+CE gradient shortcut, Adam optimizer with bias correction,
+and a KV cache for incremental autoregressive generation.
+
+## Backpropagation, briefly
+
+Forward pass caches every intermediate activation. Backward pass walks them
+in reverse, with each layer-level helper returning `(d_input, grads_for_params)`.
+Training is mini-batch SGD with explicit gradient accumulation:
+
+1. zero an accumulator (one slot per parameter)
+2. for each example: forward, backward, **add** grads into the accumulator
+3. divide by batch size → mean gradient
+4. apply once via Adam
+
+Averaging the *gradients* (not the raw errors) is what makes a mini-batch step
+equivalent to one step on the mean loss.
+
+A numerical-vs-analytic gradient check (`ruby test_gradients.rb`) confirms the
+backward pass: max absolute error is ~1e-8.
 
 ## Usage
-Run `ruby run.rb` with optional parameters:
-- `--epochs`: Number of training epochs (default: 10)
-- `--learning_rate`: Learning rate for training (default: 0.01)
-- `--corpus`: Input text file (default: simple_french.txt)
-- `--prompt`: Starting prompt for text generation (default: "Je")
-- `--hidden_size`: Size of hidden layers (default: 4)
-- `--latent_size`: Size of latent layer (default: 2)
-- `--token_num`: How many tokens to generate (default: 4)
 
+```sh
+# Transformer (default)
+ruby run.rb --epochs 30 --learning_rate 0.005 \
+            --d_model 16 --d_ff 32 --n_heads 2 --n_layers 2 \
+            --context_length 8 --corpus minimal --prompt "un est" --num_tokens 4
+
+# Autoencoder
+ruby run.rb --model autoencoder --epochs 20 --learning_rate 0.05 \
+            --hidden_size 8 --latent_size 4 --corpus minimal --prompt "un"
 ```
- ruby run.rb --epochs 20 --learning_rate 0.005 --hidden_size 8 --latent_size 4 --corpus minimal --prompt="un" --num_tokens 2
-```
 
-## Training Methods
-The model supports three training methods:
-- Stochastic Gradient Descent (SGD): Updates weights after each input (batch_size = 1)
-- Mini-batch Gradient Descent: Updates weights after processing a small batch of inputs (1 < batch_size < dataset size)
-- Batch Gradient Descent: Updates weights after processing the entire dataset (batch_size = dataset size)
+Models are cached on disk after training (transformer in plain text, autoencoder
+in `Marshal`). Re-running the same hyperparameters loads the cached model.
 
-The batch size can be controlled via the --batch_size command-line option.
-## Requirements
-- Ruby 3.x
+## Spinel-friendly subset
 
-This project is for educational purposes only and is not intended for production use.
+The transformer (and tokenizer) avoid `Marshal`, `instance_variable_set`, and
+all metaprogramming so they can plausibly compile under
+[Spinel](https://github.com/matz/spinel). The autoencoder still uses stdlib
+`Matrix` and `Marshal` and is CRuby-only.
+
+## Status
+
+Educational. The minimal corpus (5 lines, 7-token vocabulary) trains to loss
+~0.1 in a fraction of a second. Larger corpora work but a real LM at this
+scale would still want sweeping over learning rate, batch size, and epoch
+count — this is a hand-built toy, not a production system.
