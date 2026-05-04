@@ -957,7 +957,7 @@ class TransformerLM
     n = p.flat.length
     i = 0
     while i < n
-      p.flat[i] = p.flat[i] - lr * g.flat[i]   # not `-=`: Spinel drops it
+      p.flat[i] -= lr * g.flat[i]
       i += 1
     end
   end
@@ -966,7 +966,7 @@ class TransformerLM
     n = p.length
     i = 0
     while i < n
-      p[i] = p[i] - lr * g[i]
+      p[i] -= lr * g[i]
       i += 1
     end
   end
@@ -1035,12 +1035,12 @@ class TransformerLM
       return
     end
 
-    lr = self.cross_entropy_grad(@cache.logits, token_ids)
-    target_grads.loss = lr.loss
+    loss_res = self.cross_entropy_grad(@cache.logits, token_ids)
+    target_grads.loss = loss_res.loss
 
     # LM head: logits = x_final · lm_head
-    target_grads.lm_head = @cache.x_final.t_matmul(lr.dlogits)
-    dx_final = lr.dlogits.matmul_t(@lm_head)
+    target_grads.lm_head = @cache.x_final.t_matmul(loss_res.dlogits)
+    dx_final = loss_res.dlogits.matmul_t(@lm_head)
 
     # Final RMSNorm. Use `self.` so Spinel's call-site parameter inference
     # picks up the typed args (only fires for explicit-receiver calls).
@@ -1117,14 +1117,14 @@ puts model.lm_head.flat[0]
 puts "  lm_head.flat[7]="
 puts model.lm_head.flat[7]
 
-lr = model.cross_entropy_grad(logits, token_ids)
+loss_res = model.cross_entropy_grad(logits, token_ids)
 puts "  loss="
-puts lr.loss
-puts "  dlogits shape="   + lr.dlogits.nrows.to_s + "x" + lr.dlogits.ncols.to_s
+puts loss_res.loss
+puts "  dlogits shape="   + loss_res.dlogits.nrows.to_s + "x" + loss_res.dlogits.ncols.to_s
 puts "  dlogits.flat[0]="
-puts lr.dlogits.flat[0]
+puts loss_res.dlogits.flat[0]
 puts "  dlogits.flat[6]="
-puts lr.dlogits.flat[6]
+puts loss_res.dlogits.flat[6]
 
 # Backward pass: fill grads.
 grads = Gradients.new(7, 16, 32, 2, 8, 2, 8)
