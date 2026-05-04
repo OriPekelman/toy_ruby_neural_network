@@ -1,0 +1,12 @@
+# Binaries produced by Spinel compilation
+transformer_spinel
+train_minimal_spinel
+train_tinystories_spinel
+
+# CRuby Marshal'd model caches
+*.dat
+
+# Trained-model text checkpoints from run.rb (these are huge and easy to recreate)
+hf_*.txt
+simple_french_*.txt
+minimal_*.txt

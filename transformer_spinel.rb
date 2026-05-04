@@ -383,7 +383,7 @@ class TransformerLM
   attr_accessor :vocab_size, :d_model, :d_ff, :n_heads, :d_head,
                 :n_layers, :context_length,
                 :token_embed, :pos_embed, :lm_head,
-                :norm_final_gamma, :blocks
+                :norm_final_gamma, :blocks, :vocabulary
 
   def initialize(vocab_size, d_model, d_ff, n_heads, n_layers, context_length)
     @vocab_size     = vocab_size
@@ -406,6 +406,10 @@ class TransformerLM
     @lm_head.fill_random(s)
 
     @norm_final_gamma = Array.new(d_model, 1.0)
+
+    # Vocabulary: seeded with one placeholder so Spinel infers it as
+    # an array of strings; callers should set the real vocab after construction.
+    @vocabulary = ["?"]
 
     # Inline Block.new in the literal — Spinel's scan_ivars runs before
     # local-variable types are inferred, so storing through a temp would
@@ -987,16 +991,13 @@ class TransformerLM
     end
   end
 
-  # One training step: forward, backward, apply.
-  def train_step(token_ids, grads, lr)
-    grads.fill_zero
-    self.forward(token_ids)
-    self.backward(token_ids, grads)
-    self.apply_gradients_sgd(grads, lr)
-    grads.loss
-  end
-
-  # Block i's input is the previous block's output, or the embedded input
+  # No `train_step` here: Spinel compiles every class method whether or
+  # not it has callers. With no callers in the current program its
+  # IntArray param defaults to `mrb_int`, and the body's
+  # `forward(seq_ids)` then fails to type-check. Each driver inlines the
+  # forward / backward / apply_gradients_sgd sequence at its top level,
+  # which is short and makes the per-step cost obvious.
+# Block i's input is the previous block's output, or the embedded input
   # for block 0. Returning a Mat in both branches makes Spinel type the
   # method's return as Mat — useful as an argument to backward helpers
   # whose param inference doesn't trust ternary expressions.
@@ -1028,14 +1029,14 @@ class TransformerLM
 
   # Full backward pass. Fills `target_grads` with this example's gradients
   # and the loss. Caller is responsible for calling forward(token_ids) first.
-  def backward(token_ids, target_grads)
-    n_pred = token_ids.length - 1
+  def backward(input_ids, target_grads)
+    n_pred = input_ids.length - 1
     if n_pred <= 0
       target_grads.loss = 0.0
       return
     end
 
-    loss_res = self.cross_entropy_grad(@cache.logits, token_ids)
+    loss_res = self.cross_entropy_grad(@cache.logits, input_ids)
     target_grads.loss = loss_res.loss
 
     # LM head: logits = x_final · lm_head
@@ -1056,7 +1057,7 @@ class TransformerLM
       li -= 1
     end
 
-    self.embed_backward(token_ids, dx, target_grads)
+    self.embed_backward(input_ids, dx, target_grads)
   end
 
   # One transformer block (pre-norm). Returns BlockResult.
@@ -1087,75 +1088,99 @@ class TransformerLM
 
     BlockResult.new(x_out, cache)
   end
-end
 
-# ============================================================================
-#   Smoke test: build a model and run embed + rms_norm.
-# ============================================================================
+  # =====================================================================
+  #  GENERATION — autoregressive sampling from a starting token-id list.
+  #
+  #  Tokenizing a prompt string would drag the French tokenizer (which
+  #  uses unicode_normalize and complex regex) into the Spinel-compiled
+  #  binary; instead we let the caller pre-tokenize and pass IDs.
+  # =====================================================================
+  def generate_from_ids(start_ids, max_tokens, temperature)
+    # Anchor start_ids as an IntArray for Spinel param-type inference.
+    n_start = start_ids.length
+    # Copy start_ids into a fresh IntArray we'll grow.
+    tokens = [start_ids[0]]
+    i = 1
+    while i < n_start
+      tokens.push(start_ids[i])
+      i += 1
+    end
 
-model = TransformerLM.new(7, 16, 32, 2, 2, 8)
-puts "Built model"
-puts "  vocab="           + model.vocab_size.to_s
-puts "  d_model="         + model.d_model.to_s
-puts "  blocks="          + model.blocks.length.to_s
-puts "  heads/block="     + model.blocks[0].w_q.length.to_s
+    step = 0
+    while step < max_tokens
+      ctx_len = tokens.length
+      if ctx_len > @context_length
+        ctx_len = @context_length
+      end
+      # Build the trailing-window context.
+      ctx = [tokens[tokens.length - ctx_len]]
+      j = 1
+      while j < ctx_len
+        ctx.push(tokens[tokens.length - ctx_len + j])
+        j += 1
+      end
 
-token_ids = [0, 1, 2]
-
-logits = model.forward(token_ids)
-puts "  logits shape="    + logits.nrows.to_s + "x" + logits.ncols.to_s
-puts "  logits.flat[0]="
-puts logits.flat[0]
-puts "  logits.flat[1]="
-puts logits.flat[1]
-puts "  logits.flat[6]="
-puts logits.flat[6]
-puts "  x_final.flat[0]="
-puts model.cache.x_final.flat[0]
-puts "  lm_head.flat[0]="
-puts model.lm_head.flat[0]
-puts "  lm_head.flat[7]="
-puts model.lm_head.flat[7]
-
-loss_res = model.cross_entropy_grad(logits, token_ids)
-puts "  loss="
-puts loss_res.loss
-puts "  dlogits shape="   + loss_res.dlogits.nrows.to_s + "x" + loss_res.dlogits.ncols.to_s
-puts "  dlogits.flat[0]="
-puts loss_res.dlogits.flat[0]
-puts "  dlogits.flat[6]="
-puts loss_res.dlogits.flat[6]
-
-# Backward pass: fill grads.
-grads = Gradients.new(7, 16, 32, 2, 8, 2, 8)
-model.backward(token_ids, grads)
-puts "  grad token_embed shape=" + grads.token_embed.nrows.to_s + "x" + grads.token_embed.ncols.to_s
-puts "  grad lm_head shape="     + grads.lm_head.nrows.to_s + "x" + grads.lm_head.ncols.to_s
-puts "  grads.lm_head.flat[0] (after first backward):"
-puts grads.lm_head.flat[0]
-puts "  grads.token_embed.flat[0]:"
-puts grads.token_embed.flat[0]
-puts "  loss before training="
-puts grads.loss
-
-# Training loop on a tiny corpus.
-seqs_a = [0, 1, 2]
-seqs_b = [3, 4, 5]
-seqs_c = [1, 2, 3]
-puts ""
-puts "Training (40 steps over 3 sequences, SGD lr=0.05):"
-step = 0
-while step < 40
-  total_loss = 0.0
-  total_loss += model.train_step(seqs_a, grads, 0.05)
-  total_loss += model.train_step(seqs_b, grads, 0.05)
-  total_loss += model.train_step(seqs_c, grads, 0.05)
-  if step % 4 == 0
-    puts "  step="
-    puts step
-    puts "  mean_loss="
-    puts total_loss / 3.0
+      logits = self.forward(ctx)
+      next_id = self.sample_logits_row(logits, ctx_len - 1, temperature)
+      tokens.push(next_id)
+      step += 1
+    end
+    tokens
   end
-  step += 1
-end
 
+  # Sample a token ID from row `row` of `logits` (T × vocab_size flat).
+  # temperature <= 0 → argmax, else softmax with temperature + cumulative
+  # sample. `rand(N).to_f / N` gives a uniform [0,1) under both Spinel
+  # (where bare `rand` returns C's int rand) and CRuby.
+  def sample_logits_row(logits, row, temperature)
+    v = logits.ncols
+    base = row * v
+    if temperature <= 0.0
+      best_id  = 0
+      best_val = logits.flat[base]
+      j = 1
+      while j < v
+        val = logits.flat[base + j]
+        if val > best_val
+          best_val = val
+          best_id  = j
+        end
+        j += 1
+      end
+      return best_id
+    end
+
+    inv_t = 1.0 / temperature
+
+    # Stable-softmax: subtract the max before exp.
+    mx = logits.flat[base]
+    j = 1
+    while j < v
+      val = logits.flat[base + j]
+      if val > mx
+        mx = val
+      end
+      j += 1
+    end
+
+    sum = 0.0
+    j = 0
+    while j < v
+      sum = sum + Math.exp((logits.flat[base + j] - mx) * inv_t)
+      j += 1
+    end
+
+    r   = (rand(1_000_000).to_f / 1_000_000.0) * sum
+    cum = 0.0
+    j = 0
+    while j < v
+      cum = cum + Math.exp((logits.flat[base + j] - mx) * inv_t)
+      if r < cum
+        return j
+      end
+      j += 1
+    end
+    v - 1
+  end
+end
