@@ -317,13 +317,16 @@ end
 # Gradients for the whole model. Structurally a mirror of TransformerLM's
 # parameters: same Block-shaped per-layer grads (we reuse ZeroBlock).
 class Gradients
-  attr_accessor :token_embed, :pos_embed, :lm_head,
+  # Tied embeddings: lm_head shares storage with token_embed (lm_head[d,v] ==
+  # token_embed[v,d]), so there's a single token_embed gradient that
+  # accumulates contributions from BOTH the input embedding lookup and
+  # the output (unembed) projection.
+  attr_accessor :token_embed, :pos_embed,
                 :norm_final_gamma, :blocks, :loss
 
   def initialize(vocab_size, d_model, d_ff, n_heads, d_head, n_layers, context_length)
     @token_embed = Mat.new(vocab_size, d_model)
     @pos_embed   = Mat.new(context_length, d_model)
-    @lm_head     = Mat.new(d_model, vocab_size)
     @norm_final_gamma = Array.new(d_model, 0.0)
     @blocks = [Block.new(d_model, d_head, d_ff, n_heads)]
     li = 1
@@ -337,7 +340,6 @@ class Gradients
   def fill_zero
     @token_embed.fill_zero
     @pos_embed.fill_zero
-    @lm_head.fill_zero
     n = @norm_final_gamma.length
     i = 0
     while i < n
@@ -350,6 +352,27 @@ class Gradients
       bi += 1
     end
     @loss = 0.0
+  end
+end
+
+# Adam optimizer state: per-parameter first and second moments (m, v),
+# plus the accumulating bias-correction products bc1=β1ᵗ, bc2=β2ᵗ. We
+# maintain bc1/bc2 as running products instead of computing β**t each
+# step, which would require Spinel-friendly power-of-int support and
+# is also numerically wasteful.
+#
+# m and v are Gradients-shaped (same per-parameter structure as the
+# accumulator) so we can reuse Gradients#fill_zero to initialize them.
+class AdamState
+  attr_accessor :m, :v, :bc1, :bc2
+
+  def initialize(vocab_size, d_model, d_ff, n_heads, d_head, n_layers, context_length)
+    @m = Gradients.new(vocab_size, d_model, d_ff, n_heads, d_head, n_layers, context_length)
+    @v = Gradients.new(vocab_size, d_model, d_ff, n_heads, d_head, n_layers, context_length)
+    @m.fill_zero
+    @v.fill_zero
+    @bc1 = 1.0   # β1^0
+    @bc2 = 1.0   # β2^0
   end
 end
 
@@ -382,7 +405,7 @@ end
 class TransformerLM
   attr_accessor :vocab_size, :d_model, :d_ff, :n_heads, :d_head,
                 :n_layers, :context_length,
-                :token_embed, :pos_embed, :lm_head,
+                :token_embed, :pos_embed,
                 :norm_final_gamma, :blocks, :vocabulary
 
   def initialize(vocab_size, d_model, d_ff, n_heads, n_layers, context_length)
@@ -402,8 +425,10 @@ class TransformerLM
     @pos_embed = Mat.new(context_length, d_model)
     @pos_embed.fill_random(s)
 
-    @lm_head = Mat.new(d_model, vocab_size)
-    @lm_head.fill_random(s)
+    # Tied embeddings: lm_head is @token_embed used in transposed form
+    # at unembed time (logits = x_final · token_embedᵀ). No separate
+    # @lm_head matrix; the unembed gradient accumulates into the same
+    # token_embed grad slot as the input-side embedding lookup.
 
     @norm_final_gamma = Array.new(d_model, 1.0)
 
@@ -595,15 +620,28 @@ class TransformerLM
     HeadCache.new(q, k, v, scores, head_out)
   end
 
-  # FFN: relu(h · W_ff1) · W_ff2.  Returns (out_mat, FFCache).
+  # FFN: gelu(h · W_ff1) · W_ff2.  Returns (out_mat, FFCache).
+  # GeLU uses the tanh approximation, with tanh implemented via Math.exp
+  # (Spinel doesn't expose Math.tanh): t = (e^{2u} - 1) / (e^{2u} + 1).
+  # u is clamped to ±20 to avoid exp overflow on outlier activations.
   def feed_forward(h, block)
     pre = h.matmul(block.w_ff1)
     hidden = Mat.new(pre.nrows, pre.ncols)
+    c = 0.7978845608028654   # sqrt(2/pi)
     n = pre.nrows * pre.ncols
     i = 0
     while i < n
-      v = pre.flat[i]
-      hidden.flat[i] = v > 0.0 ? v : 0.0
+      x = pre.flat[i]
+      u = c * (x + 0.044715 * x * x * x)
+      if u > 20.0
+        hidden.flat[i] = x
+      elsif u < -20.0
+        hidden.flat[i] = 0.0
+      else
+        e2u = Math.exp(2.0 * u)
+        t   = (e2u - 1.0) / (e2u + 1.0)
+        hidden.flat[i] = 0.5 * x * (1.0 + t)
+      end
       i += 1
     end
     out = hidden.matmul(block.w_ff2)
@@ -634,7 +672,8 @@ class TransformerLM
     cache.x_final   = nr.y
     cache.rms_final = nr.rms
 
-    cache.logits = nr.y.matmul(@lm_head)
+    # Tied unembed: logits[t,v] = Σ_d x_final[t,d] · token_embed[v,d]
+    cache.logits = nr.y.matmul_t(@token_embed)
     @cache = cache
     cache.logits
   end
@@ -832,13 +871,27 @@ class TransformerLM
     d_w_ff2  = ff_cache.hidden.t_matmul(d_ff_out)
     d_hidden = d_ff_out.matmul_t(block.w_ff2)
 
-    # ReLU': zero where pre-activation was non-positive.
+    # GeLU' (tanh approximation):
+    #   gelu(x) = 0.5 x (1 + t),                t = tanh(u),  u = c (x + 0.044715 x³)
+    #   gelu'(x) = 0.5 (1 + t) + 0.5 x (1 - t²) · c (1 + 0.134145 x²)
     d_pre = Mat.new(d_hidden.nrows, d_hidden.ncols)
+    c = 0.7978845608028654
     n = d_hidden.nrows * d_hidden.ncols
     i = 0
     while i < n
-      v = ff_cache.pre.flat[i]
-      d_pre.flat[i] = v > 0.0 ? d_hidden.flat[i] : 0.0
+      x  = ff_cache.pre.flat[i]
+      u  = c * (x + 0.044715 * x * x * x)
+      if u > 20.0
+        deriv = 1.0
+      elsif u < -20.0
+        deriv = 0.0
+      else
+        e2u   = Math.exp(2.0 * u)
+        t     = (e2u - 1.0) / (e2u + 1.0)
+        du_dx = c * (1.0 + 0.134145 * x * x)
+        deriv = 0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du_dx
+      end
+      d_pre.flat[i] = d_hidden.flat[i] * deriv
       i += 1
     end
 
@@ -947,7 +1000,6 @@ class TransformerLM
   def apply_gradients_sgd(grads, lr)
     self.sgd_step_mat(@token_embed, grads.token_embed, lr)
     self.sgd_step_mat(@pos_embed,   grads.pos_embed,   lr)
-    self.sgd_step_mat(@lm_head,     grads.lm_head,     lr)
     self.sgd_step_vec(@norm_final_gamma, grads.norm_final_gamma, lr)
 
     li = 0
@@ -987,6 +1039,108 @@ class TransformerLM
       self.sgd_step_mat(p_block.w_q[h], g_block.w_q[h], lr)
       self.sgd_step_mat(p_block.w_k[h], g_block.w_k[h], lr)
       self.sgd_step_mat(p_block.w_v[h], g_block.w_v[h], lr)
+      h += 1
+    end
+  end
+
+  # Adam: per-coordinate adaptive learning rate driven by running
+  # estimates of the gradient mean (m) and squared mean (v).
+  #
+  #   m  ← β1·m + (1−β1)·g           v  ← β2·v + (1−β2)·g²
+  #   m̂ = m / (1 − β1ᵗ)              v̂ = v / (1 − β2ᵗ)
+  #   p -= lr · m̂ / (√v̂ + ε)
+  #
+  # bc1 / bc2 are kept as running products in AdamState so we don't need
+  # `Float ** Int`, which Spinel doesn't always type cleanly.
+  def apply_gradients_adam(grads, state, lr, beta1, beta2, eps)
+    state.bc1 = state.bc1 * beta1
+    state.bc2 = state.bc2 * beta2
+    omc1 = 1.0 - state.bc1
+    omc2 = 1.0 - state.bc2
+
+    self.adam_step_mat(@token_embed, grads.token_embed,
+                       state.m.token_embed, state.v.token_embed,
+                       lr, beta1, beta2, eps, omc1, omc2)
+    self.adam_step_mat(@pos_embed, grads.pos_embed,
+                       state.m.pos_embed, state.v.pos_embed,
+                       lr, beta1, beta2, eps, omc1, omc2)
+    self.adam_step_vec(@norm_final_gamma, grads.norm_final_gamma,
+                       state.m.norm_final_gamma, state.v.norm_final_gamma,
+                       lr, beta1, beta2, eps, omc1, omc2)
+
+    li = 0
+    while li < @n_layers
+      self.adam_step_block(@blocks[li], grads.blocks[li],
+                           state.m.blocks[li], state.v.blocks[li],
+                           lr, beta1, beta2, eps, omc1, omc2)
+      li += 1
+    end
+  end
+
+  def adam_step_mat(p, g, m, v, lr, b1, b2, eps, omc1, omc2)
+    one_minus_b1 = 1.0 - b1
+    one_minus_b2 = 1.0 - b2
+    n = p.flat.length
+    i = 0
+    while i < n
+      gi = g.flat[i]
+      new_m = b1 * m.flat[i] + one_minus_b1 * gi
+      new_v = b2 * v.flat[i] + one_minus_b2 * gi * gi
+      m.flat[i] = new_m
+      v.flat[i] = new_v
+      m_hat = new_m / omc1
+      v_hat = new_v / omc2
+      p.flat[i] -= lr * m_hat / (Math.sqrt(v_hat) + eps)
+      i += 1
+    end
+  end
+
+  def adam_step_vec(p, g, m, v, lr, b1, b2, eps, omc1, omc2)
+    one_minus_b1 = 1.0 - b1
+    one_minus_b2 = 1.0 - b2
+    n = p.length
+    i = 0
+    while i < n
+      gi = g[i]
+      new_m = b1 * m[i] + one_minus_b1 * gi
+      new_v = b2 * v[i] + one_minus_b2 * gi * gi
+      m[i] = new_m
+      v[i] = new_v
+      m_hat = new_m / omc1
+      v_hat = new_v / omc2
+      p[i] -= lr * m_hat / (Math.sqrt(v_hat) + eps)
+      i += 1
+    end
+  end
+
+  def adam_step_block(p_block, g_block, m_block, v_block, lr, b1, b2, eps, omc1, omc2)
+    self.adam_step_vec(p_block.norm1_gamma, g_block.norm1_gamma,
+                       m_block.norm1_gamma, v_block.norm1_gamma,
+                       lr, b1, b2, eps, omc1, omc2)
+    self.adam_step_vec(p_block.norm2_gamma, g_block.norm2_gamma,
+                       m_block.norm2_gamma, v_block.norm2_gamma,
+                       lr, b1, b2, eps, omc1, omc2)
+    self.adam_step_mat(p_block.w_o,   g_block.w_o,
+                       m_block.w_o,   v_block.w_o,
+                       lr, b1, b2, eps, omc1, omc2)
+    self.adam_step_mat(p_block.w_ff1, g_block.w_ff1,
+                       m_block.w_ff1, v_block.w_ff1,
+                       lr, b1, b2, eps, omc1, omc2)
+    self.adam_step_mat(p_block.w_ff2, g_block.w_ff2,
+                       m_block.w_ff2, v_block.w_ff2,
+                       lr, b1, b2, eps, omc1, omc2)
+
+    h = 0
+    while h < @n_heads
+      self.adam_step_mat(p_block.w_q[h], g_block.w_q[h],
+                         m_block.w_q[h], v_block.w_q[h],
+                         lr, b1, b2, eps, omc1, omc2)
+      self.adam_step_mat(p_block.w_k[h], g_block.w_k[h],
+                         m_block.w_k[h], v_block.w_k[h],
+                         lr, b1, b2, eps, omc1, omc2)
+      self.adam_step_mat(p_block.w_v[h], g_block.w_v[h],
+                         m_block.w_v[h], v_block.w_v[h],
+                         lr, b1, b2, eps, omc1, omc2)
       h += 1
     end
   end
@@ -1039,9 +1193,16 @@ class TransformerLM
     loss_res = self.cross_entropy_grad(@cache.logits, input_ids)
     target_grads.loss = loss_res.loss
 
-    # LM head: logits = x_final · lm_head
-    target_grads.lm_head = @cache.x_final.t_matmul(loss_res.dlogits)
-    dx_final = loss_res.dlogits.matmul_t(@lm_head)
+    # Tied unembed: logits = x_final · token_embedᵀ.
+    #   d_token_embed[v,d] += Σ_t dlogits[t,v] · x_final[t,d]
+    #     ⇒ dlogits.t_matmul(x_final)   (vocab × d_model)
+    #   d_x_final[t,d]      = Σ_v dlogits[t,v] · token_embed[v,d]
+    #     ⇒ dlogits.matmul(token_embed) (T × d_model)
+    # The unembed gradient is added directly into target_grads.token_embed
+    # — embed_backward later adds the input-side row contributions on top.
+    d_te_unembed = loss_res.dlogits.t_matmul(@cache.x_final)
+    target_grads.token_embed.add!(d_te_unembed)
+    dx_final = loss_res.dlogits.matmul(@token_embed)
 
     # Final RMSNorm. Use `self.` so Spinel's call-site parameter inference
     # picks up the typed args (only fires for explicit-receiver calls).

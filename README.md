@@ -1,111 +1,108 @@
-# Toy neural networks in pure Ruby
+# Toy transformer LM in Ruby (Spinel-compiled)
 
-Two from-scratch implementations, no dependencies beyond the Ruby standard
-library. The whole point is to be readable: you should be able to follow how
-backpropagation works by reading the code top to bottom.
+A small decoder-only transformer language model written in Ruby and compiled
+to a native binary by [Spinel](https://github.com/matz/spinel) — matz's Ruby
+AOT compiler. The point is **readability**: you should be able to follow
+forward pass, backward pass, optimizer, and training loop top-to-bottom.
 
-## What's in here
+Trained from scratch on a 5K-line slice of TinyStories, the toy model
+(d_model=32, 2 layers, 4 heads, ~30K parameters) produces recognizable
+TinyStories-style continuations after ~30 epochs.
 
-| File | Lines | What it is |
-|---|---:|---|
-| `transformer.rb` | ~880 | Decoder-only Transformer LM with multi-head attention, RMSNorm, residuals, FFN, KV cache, Adam |
-| `neural_network.rb` | ~380 | Simple autoencoder — useful as a minimal backprop teaching example |
-| `tokenizer.rb` | ~30 | Word-level French tokenizer (handles `c'est`, `aujourd'hui`, etc.) |
-| `dataset_loader.rb` | ~80 | Fetch/cache plain-text files from the HuggingFace Hub |
-| `run.rb` | ~120 | CLI driver |
-| `test_gradients.rb` | ~110 | Numerical gradient check against the transformer's analytic backward |
-
-The transformer is the main thing. The autoencoder is preserved because its
-single forward + backward pass is the simplest possible illustration of
-gradient accumulation — the same accumulator pattern then carries over to the
-transformer.
-
-## Architecture (transformer)
+## Layout
 
 ```
-token_ids ─▶ embed ─▶ [Block]×N ─▶ RMSNorm ─▶ LM head ─▶ logits
+.
+├── lib/
+│   ├── transformer.rb      Mat, Block, TransformerLM, Gradients, AdamState
+│   └── training.rb         LRSchedule, DataLoader, Adam, corpus readers
+├── prep/                   CRuby-only — runs once, writes data/
+│   ├── prep_tinystories.rb HuggingFace download + tokenize + chunk
+│   ├── dataset_loader.rb   stdlib-only HF file fetcher
+│   └── tokenizer.rb        word-level French/English tokenizer
+├── data/                   Generated tokenized corpus (gitignored)
+│   ├── ts_vocab.txt        one word per line; line index = token id
+│   ├── ts_seqs.txt         one sequence per line, space-separated IDs
+│   └── ts_prompt.txt       seed prompt's token IDs
+├── train_tinystories.rb    Main training entrypoint (Spinel-compiled)
+└── train_minimal.rb        ~30-line smoke test (Spinel-compiled)
+```
+
+## Architecture
+
+```
+token_ids ─▶ embed ─▶ [Block]×N ─▶ RMSNorm ─▶ unembed (tied) ─▶ logits
 
 Block (pre-norm):
-    x ─▶ RMSNorm ─▶ multi-head self-attention (Q,K,V,O, causal mask) ─▶ + ─┐
-                                                                           │
-                                                       residual ◀──────────┘
-    x'─▶ RMSNorm ─▶ FFN (Linear → ReLU → Linear) ─▶ + ─┐
+    x ─▶ RMSNorm ─▶ multi-head causal attention ─▶ + ─┐
+                                                      │
+                                  residual ◀──────────┘
+    x'─▶ RMSNorm ─▶ FFN (Linear → GeLU → Linear) ─▶ + ─┐
                                                        │
                                   residual ◀───────────┘
 ```
 
-Modern bits included: pre-norm, RMSNorm (LLaMA-style, simpler than LayerNorm),
-multi-head attention with per-head Q/K/V projections, causal masking, residual
-connections, learned positional embeddings, cross-entropy loss with the
-combined softmax+CE gradient shortcut, Adam optimizer with bias correction,
-and a KV cache for incremental autoregressive generation.
-
-## Backpropagation, briefly
-
-Forward pass caches every intermediate activation. Backward pass walks them
-in reverse, with each layer-level helper returning `(d_input, grads_for_params)`.
-Training is mini-batch SGD with explicit gradient accumulation:
-
-1. zero an accumulator (one slot per parameter)
-2. for each example: forward, backward, **add** grads into the accumulator
-3. divide by batch size → mean gradient
-4. apply once via Adam
-
-Averaging the *gradients* (not the raw errors) is what makes a mini-batch step
-equivalent to one step on the mean loss.
-
-A numerical-vs-analytic gradient check (`ruby test_gradients.rb`) confirms the
-backward pass: max absolute error is ~1e-8.
+Standard modern bits: pre-RMSNorm, multi-head attention with per-head Q/K/V
+projections, causal masking, residual connections, learned positional
+embeddings, GeLU FFN, **tied input/output embeddings**, cross-entropy with
+the combined softmax+CE gradient, **Adam** with bias correction, **linear
+warmup + cosine LR decay**, and a KV cache for incremental generation.
 
 ## Usage
 
 ```sh
-# Transformer (default)
-ruby run.rb --epochs 30 --learning_rate 0.005 \
-            --d_model 16 --d_ff 32 --n_heads 2 --n_layers 2 \
-            --context_length 8 --corpus minimal --prompt "un est" --num_tokens 4
+# 1. Prep — download, tokenize, chunk into context windows. CRuby.
+ruby prep/prep_tinystories.rb --max_lines 5000 --context_length 64 \
+                              --prompt "Once upon a time"
 
-# Autoencoder
-ruby run.rb --model autoencoder --epochs 20 --learning_rate 0.05 \
-            --hidden_size 8 --latent_size 4 --corpus minimal --prompt "un"
+# 2. Compile — Spinel turns the train script + lib/ into a native binary.
+spinel train_tinystories.rb -o train_tinystories
+
+# 3. Train + generate — the binary loads data/ts_*.txt and runs end-to-end.
+./train_tinystories
 ```
 
-Models are cached on disk after training (transformer in plain text, autoencoder
-in `Marshal`). Re-running the same hyperparameters loads the cached model.
-
-### Training on a HuggingFace dataset
-
-Pass `--hf_dataset REPO_ID:FILENAME` to pull a plain-text file from the
-HuggingFace Hub instead of reading a local `.txt`. Files are cached under
-`~/.cache/huggingface/datasets-toy-rnn/`. Use `--max_lines N` to take only
-the first N lines (the toy model is small; the full corpus is rarely the
-right thing to throw at it).
+Smoke test (build + 40 SGD steps, ~1 s):
 
 ```sh
-# Train on a 200-line slice of Tiny Shakespeare
-ruby run.rb --hf_dataset Trelis/tiny-shakespeare:input.txt --max_lines 200 \
-            --epochs 5 --d_model 16 --d_ff 32 --n_heads 2 --n_layers 2 \
-            --context_length 16 --batch_size 32 \
-            --prompt "First Citizen:" --num_tokens 8 --temperature 0.8
+spinel train_minimal.rb -o train_minimal
+./train_minimal
 ```
 
-`dataset_loader.rb` is a stdlib-only fetcher (Net::HTTP + a tiny on-disk
-cache). It does not depend on the `durable_huggingface_hub` gem; that gem
-hits two issues with file downloads (no `follow_redirects` middleware on
-its Faraday connection, and its streaming `download_to_blob` writes the
-307-redirect body to the destination before the real content). Both
-filed upstream.
+## Spinel constraints (and why some idioms look unusual)
 
-## Spinel-friendly subset
+Spinel does whole-program type inference; the entire transferred Ruby has to
+type-check against a single closed world. A few patterns worked around in
+this code:
 
-The transformer (and tokenizer) avoid `Marshal`, `instance_variable_set`, and
-all metaprogramming so they can plausibly compile under
-[Spinel](https://github.com/matz/spinel). The autoencoder still uses stdlib
-`Matrix` and `Marshal` and is CRuby-only.
+- **No blocks-as-iterators on user types**: `DataLoader` exposes
+  `batch_count` / `batch_start` / `batch_end` / `at(i)` / `usable?(i)`
+  rather than `each_batch { |b| … }`.
+- **Class-method param inference is anchored from top-level call sites**:
+  the script does one warm-up `forward + backward + adam` against the
+  prompt before the real loop, then `optimizer.reset` to clear the
+  warm-up step's contribution.
+- **`Array#pop` is a no-op for arrays-of-objects**: corpus readers seed
+  with a placeholder, pop it (works for StrArray) or seed-and-skip-index-0
+  (PtrArray-of-IntArray).
+- **`Float ** Int` is finicky**: Adam keeps `bc1`/`bc2` as running products
+  rather than `beta1 ** t`.
+- **Spinel compiles every class method whether called or not**: unused
+  methods with poly params still need to type-check, so we don't define
+  `train_step` and instead inline forward/backward/optimizer in the loop.
+
+## What's been merged upstream
+
+- [matz/spinel#258](https://github.com/matz/spinel/pull/258) —
+  `fix(codegen): root PtrArray temp in array-of-objects literal` —
+  found while debugging a SIGSEGV in `Block#initialize`.
 
 ## Status
 
-Educational. The minimal corpus (5 lines, 7-token vocabulary) trains to loss
-~0.1 in a fraction of a second. Larger corpora work but a real LM at this
-scale would still want sweeping over learning rate, batch size, and epoch
-count — this is a hand-built toy, not a production system.
+Educational. Loss converges from ~5.3 (epoch 1) to ~3 (epoch 30) on
+TinyStories with the upgraded stack. Generations look plausibly TinyStories-shaped:
+*"once upon a time there was a little boy named tim he loved to play in
+the park with his best friends…"*
+
+Real LM training at this scale still wants careful hyperparameter sweeps;
+this is a hand-built toy, not production.
