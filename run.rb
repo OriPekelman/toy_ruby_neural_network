@@ -2,6 +2,7 @@ require "optparse"
 require "benchmark"
 require_relative "transformer"
 require_relative "neural_network"
+require_relative "dataset_loader"
 
 def print_size_info(nn)
   info = nn.model_size
@@ -29,6 +30,10 @@ options = {
   # autoencoder hyperparams
   hidden_size:    8,
   latent_size:    4,
+
+  # HuggingFace dataset (optional). When set, overrides --corpus.
+  hf_dataset:     nil,    # "Trelis/tiny-shakespeare:input.txt"
+  max_lines:     nil,
 }
 
 OptionParser.new do |o|
@@ -49,10 +54,29 @@ OptionParser.new do |o|
 
   o.on("--hidden_size N",    Integer) { |v| options[:hidden_size] = v }
   o.on("--latent_size N",    Integer) { |v| options[:latent_size] = v }
+
+  o.on("--hf_dataset SPEC", "HuggingFace dataset, format REPO_ID:FILENAME (e.g. Trelis/tiny-shakespeare:input.txt)") do |v|
+    options[:hf_dataset] = v
+  end
+  o.on("--max_lines N", Integer, "When using --hf_dataset, train on only the first N non-empty lines") do |v|
+    options[:max_lines] = v
+  end
 end.parse!(into: options)
 
-corpus_path = "#{options[:corpus]}.txt"
-data        = File.readlines(corpus_path, chomp: true).reject { |l| l.strip.empty? }
+if options[:hf_dataset]
+  repo_id, filename = options[:hf_dataset].split(":", 2)
+  raise "--hf_dataset expects REPO_ID:FILENAME" unless repo_id && filename
+  puts "Loading HuggingFace dataset: #{repo_id} / #{filename}"
+  data = DatasetLoader.lines(repo_id, filename)
+  data = data.first(options[:max_lines]) if options[:max_lines]
+  puts "  loaded #{data.size} non-empty lines"
+  # Use a corpus tag derived from the dataset for the cache filename.
+  options[:corpus] = "hf_#{repo_id.tr('/', '_')}_#{filename.tr('/', '_').sub(/\.[^.]+$/, '')}"
+  options[:corpus] += "_n#{options[:max_lines]}" if options[:max_lines]
+else
+  corpus_path = "#{options[:corpus]}.txt"
+  data        = File.readlines(corpus_path, chomp: true).reject { |l| l.strip.empty? }
+end
 
 case options[:model]
 when "transformer"

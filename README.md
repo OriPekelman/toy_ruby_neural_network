@@ -11,7 +11,8 @@ backpropagation works by reading the code top to bottom.
 | `transformer.rb` | ~880 | Decoder-only Transformer LM with multi-head attention, RMSNorm, residuals, FFN, KV cache, Adam |
 | `neural_network.rb` | ~380 | Simple autoencoder — useful as a minimal backprop teaching example |
 | `tokenizer.rb` | ~30 | Word-level French tokenizer (handles `c'est`, `aujourd'hui`, etc.) |
-| `run.rb` | ~110 | CLI driver |
+| `dataset_loader.rb` | ~80 | Fetch/cache plain-text files from the HuggingFace Hub |
+| `run.rb` | ~120 | CLI driver |
 | `test_gradients.rb` | ~110 | Numerical gradient check against the transformer's analytic backward |
 
 The transformer is the main thing. The autoencoder is preserved because its
@@ -71,6 +72,29 @@ ruby run.rb --model autoencoder --epochs 20 --learning_rate 0.05 \
 
 Models are cached on disk after training (transformer in plain text, autoencoder
 in `Marshal`). Re-running the same hyperparameters loads the cached model.
+
+### Training on a HuggingFace dataset
+
+Pass `--hf_dataset REPO_ID:FILENAME` to pull a plain-text file from the
+HuggingFace Hub instead of reading a local `.txt`. Files are cached under
+`~/.cache/huggingface/datasets-toy-rnn/`. Use `--max_lines N` to take only
+the first N lines (the toy model is small; the full corpus is rarely the
+right thing to throw at it).
+
+```sh
+# Train on a 200-line slice of Tiny Shakespeare
+ruby run.rb --hf_dataset Trelis/tiny-shakespeare:input.txt --max_lines 200 \
+            --epochs 5 --d_model 16 --d_ff 32 --n_heads 2 --n_layers 2 \
+            --context_length 16 --batch_size 32 \
+            --prompt "First Citizen:" --num_tokens 8 --temperature 0.8
+```
+
+`dataset_loader.rb` is a stdlib-only fetcher (Net::HTTP + a tiny on-disk
+cache). It does not depend on the `durable_huggingface_hub` gem; that gem
+hits two issues with file downloads (no `follow_redirects` middleware on
+its Faraday connection, and its streaming `download_to_blob` writes the
+307-redirect body to the destination before the real content). Both
+filed upstream.
 
 ## Spinel-friendly subset
 
