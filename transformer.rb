@@ -168,7 +168,13 @@ class TransformerLM
     nn = new(vocab_size: words.size, d_model: d_model, d_ff: d_ff, n_heads: n_heads,
              context_length: context_length, n_layers: n_layers,
              vocabulary: words, word_to_index: word_to_index)
-    sequences = data.map { |line| nn.text_to_token_ids(line) }.reject { |s| s.size < 2 }
+    # Split lines longer than context_length into context-sized chunks so
+    # `forward` doesn't overflow. (This is also what real LMs do — chunk a
+    # corpus into sliding/non-overlapping windows of context_length tokens.)
+    sequences = data.flat_map do |line|
+      ids = nn.text_to_token_ids(line)
+      ids.each_slice(context_length).to_a
+    end.reject { |s| s.size < 2 }
     [nn, sequences]
   end
 
