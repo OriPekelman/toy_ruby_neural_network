@@ -621,9 +621,8 @@ class TransformerLM
   end
 
   # FFN: gelu(h · W_ff1) · W_ff2.  Returns (out_mat, FFCache).
-  # GeLU uses the tanh approximation, with tanh implemented via Math.exp
-  # (Spinel doesn't expose Math.tanh): t = (e^{2u} - 1) / (e^{2u} + 1).
-  # u is clamped to ±20 to avoid exp overflow on outlier activations.
+  # GeLU uses the tanh approximation: 0.5 x (1 + tanh(c (x + 0.044715 x³))),
+  # c = √(2/π).
   def feed_forward(h, block)
     pre = h.matmul(block.w_ff1)
     hidden = Mat.new(pre.nrows, pre.ncols)
@@ -633,15 +632,7 @@ class TransformerLM
     while i < n
       x = pre.flat[i]
       u = c * (x + 0.044715 * x * x * x)
-      if u > 20.0
-        hidden.flat[i] = x
-      elsif u < -20.0
-        hidden.flat[i] = 0.0
-      else
-        e2u = Math.exp(2.0 * u)
-        t   = (e2u - 1.0) / (e2u + 1.0)
-        hidden.flat[i] = 0.5 * x * (1.0 + t)
-      end
+      hidden.flat[i] = 0.5 * x * (1.0 + Math.tanh(u))
       i += 1
     end
     out = hidden.matmul(block.w_ff2)
@@ -879,18 +870,11 @@ class TransformerLM
     n = d_hidden.nrows * d_hidden.ncols
     i = 0
     while i < n
-      x  = ff_cache.pre.flat[i]
-      u  = c * (x + 0.044715 * x * x * x)
-      if u > 20.0
-        deriv = 1.0
-      elsif u < -20.0
-        deriv = 0.0
-      else
-        e2u   = Math.exp(2.0 * u)
-        t     = (e2u - 1.0) / (e2u + 1.0)
-        du_dx = c * (1.0 + 0.134145 * x * x)
-        deriv = 0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du_dx
-      end
+      x     = ff_cache.pre.flat[i]
+      u     = c * (x + 0.044715 * x * x * x)
+      t     = Math.tanh(u)
+      du_dx = c * (1.0 + 0.134145 * x * x)
+      deriv = 0.5 * (1.0 + t) + 0.5 * x * (1.0 - t * t) * du_dx
       d_pre.flat[i] = d_hidden.flat[i] * deriv
       i += 1
     end
