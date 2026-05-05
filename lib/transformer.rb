@@ -355,9 +355,9 @@ end
 
 # Adam optimizer state: per-parameter first and second moments (m, v),
 # plus the accumulating bias-correction products bc1=β1ᵗ, bc2=β2ᵗ. We
-# maintain bc1/bc2 as running products instead of computing β**t each
-# step, which would require Spinel-friendly power-of-int support and
-# is also numerically wasteful.
+# maintain bc1/bc2 as running products (one multiply per step) instead
+# of computing β**t each step (one pow() call) — pure perf choice;
+# Spinel handles `Float ** Int` cleanly.
 #
 # m and v are Gradients-shaped (same per-parameter structure as the
 # accumulator) so we can reuse Gradients#fill_zero to initialize them.
@@ -1032,8 +1032,8 @@ class TransformerLM
   #   m̂ = m / (1 − β1ᵗ)              v̂ = v / (1 − β2ᵗ)
   #   p -= lr · m̂ / (√v̂ + ε)
   #
-  # bc1 / bc2 are kept as running products in AdamState so we don't need
-  # `Float ** Int`, which Spinel doesn't always type cleanly.
+  # bc1 / bc2 are kept as running products in AdamState (one multiply
+  # per step) rather than recomputing β**t (one pow() per step).
   def apply_gradients_adam(grads, state, lr, beta1, beta2, eps)
     state.bc1 = state.bc1 * beta1
     state.bc2 = state.bc2 * beta2
