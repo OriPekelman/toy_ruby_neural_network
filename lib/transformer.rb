@@ -148,13 +148,11 @@ class Mat
     out
   end
 
-  # Spinel codegen drops `arr.flat[i] += ...` and `arr.flat[i] *= ...`
-  # patterns inside while-loops. Use explicit `=` instead.
   def add!(other)
     n = @nrows * @ncols
     i = 0
     while i < n
-      @flat[i] = @flat[i] + other.flat[i]
+      @flat[i] += other.flat[i]
       i += 1
     end
     self
@@ -1148,7 +1146,6 @@ class TransformerLM
 
   # Embedding backward: each row of dx routes to its token's embedding row
   # and to position i's positional embedding row. Repeats accumulate.
-  # Workaround: avoid `arr.flat[i] += x` (Spinel-codegen drops it).
   def embed_backward(token_ids, dx, target_grads)
     t_seq = token_ids.length
     i = 0
