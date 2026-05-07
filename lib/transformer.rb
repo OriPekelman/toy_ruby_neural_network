@@ -1125,15 +1125,10 @@ class TransformerLM
   # `forward(seq_ids)` then fails to type-check. Each driver inlines the
   # forward / backward / apply_gradients_sgd sequence at its top level,
   # which is short and makes the per-step cost obvious.
-# Block i's input is the previous block's output, or the embedded input
-  # for block 0. Returning a Mat in both branches makes Spinel type the
-  # method's return as Mat — useful as an argument to backward helpers
-  # whose param inference doesn't trust ternary expressions.
+  # Block i's input is the previous block's output, or the embedded input
+  # for block 0.
   def x_in_for_layer(li)
-    if li == 0
-      return @cache.x_embed
-    end
-    @cache.layers[li - 1].x_out
+    li == 0 ? @cache.x_embed : @cache.layers[li - 1].x_out
   end
 
   # Embedding backward: each row of dx routes to its token's embedding row
