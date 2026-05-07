@@ -758,26 +758,16 @@ class TransformerLM
   #     dL/dx_k    = (dy_k * gamma_k - x_k * coef) / r,
   #         coef = (Σ_j dy_j * gamma_j * x_j) / (d * r²)
   #     dL/dgamma_j (summed over rows) += dy_j * x_j / r
-  # We recompute rms from x rather than taking it as a param. Spinel can't
-  # currently propagate FloatArray param types across class-method call
-  # sites (its body-usage inference only resolves user-class types), so a
-  # `rms` parameter would type as int and the math would silently break.
-  def rms_norm_backward(x, gamma, dy, target_dgamma)
-    eps = 1.0e-5
+  # `rms` is the FloatArray of per-row r values cached from the forward
+  # pass — saves recomputing sumsq.
+  def rms_norm_backward(x, gamma, rms, dy, target_dgamma)
     d = gamma.length
     t_seq = x.nrows
     dx = Mat.new(t_seq, d)
 
     i = 0
     while i < t_seq
-      sumsq = 0.0
-      j = 0
-      while j < d
-        v = x.flat[i * d + j]
-        sumsq += v * v
-        j += 1
-      end
-      r = Math.sqrt(sumsq / d + eps)
+      r = rms[i]
 
       inner = 0.0
       j = 0
@@ -958,14 +948,16 @@ class TransformerLM
     d_h_norm2 = self.feed_forward_backward(dx_out, layer_cache.h_norm2,
                                            layer_cache.ff_cache, block, target_block_grads)
     d_x_attn_via_norm = self.rms_norm_backward(layer_cache.x_attn, block.norm2_gamma,
-                                               d_h_norm2, target_block_grads.norm2_gamma)
+                                               layer_cache.rms2, d_h_norm2,
+                                               target_block_grads.norm2_gamma)
     d_x_attn = dx_out.add(d_x_attn_via_norm)
 
     # Attention sublayer residual: x_attn = x_in + attn_proj.
     d_h_norm1 = self.self_attention_backward(d_x_attn, layer_cache.h_norm1,
                                              layer_cache.attn_cache, block, target_block_grads)
     d_x_in_via_norm = self.rms_norm_backward(x_in, block.norm1_gamma,
-                                             d_h_norm1, target_block_grads.norm1_gamma)
+                                             layer_cache.rms1, d_h_norm1,
+                                             target_block_grads.norm1_gamma)
 
     d_x_attn.add(d_x_in_via_norm)
   end
@@ -1188,7 +1180,8 @@ class TransformerLM
     # Final RMSNorm. Use `self.` so Spinel's call-site parameter inference
     # picks up the typed args (only fires for explicit-receiver calls).
     dx = self.rms_norm_backward(@cache.x_block_out, @norm_final_gamma,
-                                dx_final, target_grads.norm_final_gamma)
+                                @cache.rms_final, dx_final,
+                                target_grads.norm_final_gamma)
 
     # Each block in reverse.
     li = @n_layers - 1
