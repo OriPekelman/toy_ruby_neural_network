@@ -10,55 +10,6 @@
 require_relative "lib/transformer"
 require_relative "lib/training"
 
-# ---- Corpus readers -------------------------------------------------------
-# Defined in this file (rather than lib/training.rb) because Spinel's
-# top-level def type inference is more reliable when reader and caller
-# live in the same compilation source.
-
-def read_vocab(path)
-  vocab = ["?"]
-  vocab.pop
-  File.open(path, "r") do |f|
-    f.each_line { |line| vocab.push(line.chomp) }
-  end
-  vocab
-end
-
-def parse_ids(line)
-  parts = line.split(" ")
-  ids   = [parts[0].to_i]
-  k = 1
-  while k < parts.length
-    ids.push(parts[k].to_i)
-    k += 1
-  end
-  ids
-end
-
-def read_sequences(path)
-  raw = ["?"]
-  raw.pop
-  File.open(path, "r") do |f|
-    f.each_line { |line| raw.push(line.chomp) }
-  end
-  seqs = [parse_ids(raw[0])]
-  i = 1
-  while i < raw.length
-    seqs.push(parse_ids(raw[i]))
-    i += 1
-  end
-  seqs
-end
-
-def read_prompt(path)
-  raw = ["?"]
-  raw.pop
-  File.open(path, "r") do |f|
-    f.each_line { |line| raw.push(line.chomp) }
-  end
-  parse_ids(raw[0])
-end
-
 # ---- Hyperparameters ------------------------------------------------------
 
 D_MODEL        = 32
