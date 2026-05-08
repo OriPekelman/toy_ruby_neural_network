@@ -964,12 +964,12 @@ class TransformerLM
 
   # ----- Optimization -----
   #
-  # We use plain SGD here rather than Adam: Adam needs parallel @m and @v
-  # shadows of the entire parameter set, and Spinel's parameter-type
-  # inference for class methods that take grads-shaped arguments hits
-  # multiple of the limitations we've already worked around. Plain SGD
-  # demonstrates that gradient accumulation and parameter updates compile
-  # and run; Adam is the same structure × 2 with a couple of extra ops.
+  # Two optimizers live side-by-side. Plain SGD (apply_gradients_sgd) is
+  # what the train_minimal smoke test uses — a few dozen steps to prove
+  # forward/backward/update compile and converge, with no extra state.
+  # Adam (apply_gradients_adam, below) is what the TinyStories run uses,
+  # walking the same parameter inventory but with parallel m/v moment
+  # shadows held in AdamState.
 
   def apply_gradients_sgd(grads, lr)
     self.sgd_step_mat(@token_embed, grads.token_embed, lr)
@@ -1123,8 +1123,8 @@ class TransformerLM
   # not it has callers. With no callers in the current program its
   # IntArray param defaults to `mrb_int`, and the body's
   # `forward(seq_ids)` then fails to type-check. Each driver inlines the
-  # forward / backward / apply_gradients_sgd sequence at its top level,
-  # which is short and makes the per-step cost obvious.
+  # forward / backward / optimizer-step sequence at its top level, which
+  # is short and makes the per-step cost obvious.
   # Block i's input is the previous block's output, or the embedded input
   # for block 0.
   def x_in_for_layer(li)

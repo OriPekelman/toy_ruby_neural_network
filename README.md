@@ -45,8 +45,14 @@ Block (pre-norm):
 Standard modern bits: pre-RMSNorm, multi-head attention with per-head Q/K/V
 projections, causal masking, residual connections, learned positional
 embeddings, GeLU FFN, **tied input/output embeddings**, cross-entropy with
-the combined softmax+CE gradient, **Adam** with bias correction, **linear
-warmup + cosine LR decay**, and a KV cache for incremental generation.
+the combined softmax+CE gradient, **linear warmup + cosine LR decay**, and
+a KV cache for incremental generation.
+
+Both **plain SGD** and **Adam** (with bias correction) are implemented in
+`lib/transformer.rb` as `apply_gradients_sgd` / `apply_gradients_adam`.
+`train_minimal.rb` calls SGD directly for its smoke-test loop;
+`train_tinystories.rb` uses the `Adam` wrapper in `lib/training.rb`, which
+owns the m/v moment state and steps the model.
 
 ## Usage
 
@@ -85,8 +91,6 @@ this code:
 - **`Array#pop` is a no-op for arrays-of-objects**: corpus readers seed
   with a placeholder, pop it (works for StrArray) or seed-and-skip-index-0
   (PtrArray-of-IntArray).
-- **`Float ** Int` is finicky**: Adam keeps `bc1`/`bc2` as running products
-  rather than `beta1 ** t`.
 - **Spinel compiles every class method whether called or not**: unused
   methods with poly params still need to type-check, so we don't define
   `train_step` and instead inline forward/backward/optimizer in the loop.
