@@ -147,12 +147,19 @@ tinynn/libtinynn_ggml_cuda.a: tinynn/tinynn_ggml_cuda.o
 tinynn/ab_smoke_cuda: tinynn/ab_smoke_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
 	$(SPINEL) tinynn/ab_smoke_cuda.rb -o tinynn/ab_smoke_cuda
 
+# Consolidated CUDA parity test: matmul + add + gelu + rms_norm + softmax + scale + ffn_pipeline.
+ab-smoke-all-cuda: tinynn/ab_smoke_all_cuda
+	./tinynn/ab_smoke_all_cuda
+
+tinynn/ab_smoke_all_cuda: tinynn/ab_smoke_all_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+	$(SPINEL) tinynn/ab_smoke_all_cuda.rb -o tinynn/ab_smoke_all_cuda
+
 # --- maintenance ------------------------------------------------------------
 clean:
 	rm -f train_minimal train_tinystories \
 	      tinynn/tinynn_ggml.o tinynn/libtinynn_ggml.a \
 	      tinynn/tinynn_ggml_cuda.o tinynn/libtinynn_ggml_cuda.a \
-	      tinynn/smoke tinynn/ab_smoke tinynn/ab_smoke_cuda \
+	      tinynn/smoke tinynn/ab_smoke tinynn/ab_smoke_cuda tinynn/ab_smoke_all_cuda \
 	      tinynn/ab_smoke_add tinynn/ab_smoke_gelu tinynn/ab_smoke_rms_norm \
 	      tinynn/ab_smoke_softmax tinynn/ab_smoke_transpose tinynn/ab_smoke_scale \
 	      tinynn/ab_smoke_pipeline
@@ -163,4 +170,4 @@ distclean: clean
 .PHONY: all clean distclean setup-ggml setup-ggml-cuda smoke \
         ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm \
         ab-smoke-softmax ab-smoke-transpose ab-smoke-scale \
-        ab-smoke-pipeline ab-smoke-cuda test
+        ab-smoke-pipeline ab-smoke-cuda ab-smoke-all-cuda test

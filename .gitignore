@@ -22,6 +22,7 @@ tinynn/ab_smoke_transpose
 tinynn/ab_smoke_scale
 tinynn/ab_smoke_pipeline
 tinynn/ab_smoke_cuda
+tinynn/ab_smoke_all_cuda
 
 # Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
 vendor/

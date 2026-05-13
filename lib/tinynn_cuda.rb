@@ -37,6 +37,11 @@ module TinyNNCuda
   ffi_func :tnn_backend_name,     [:ptr],                   :str
   ffi_func :tnn_input_2d_f32,     [:ptr, :int, :int],       :ptr
   ffi_func :tnn_matmul,           [:ptr, :ptr, :ptr],       :ptr
+  ffi_func :tnn_add,              [:ptr, :ptr, :ptr],       :ptr
+  ffi_func :tnn_gelu,             [:ptr, :ptr],             :ptr
+  ffi_func :tnn_rms_norm,         [:ptr, :ptr, :ptr, :double], :ptr
+  ffi_func :tnn_softmax,          [:ptr, :ptr],             :ptr
+  ffi_func :tnn_scale,            [:ptr, :ptr, :double],    :ptr
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int
   ffi_func :tnn_compute,          [:ptr],                   :int
   ffi_func :tnn_scratch_set,      [:ptr, :int, :double],    :void
@@ -93,5 +98,146 @@ module TinyNNCuda
 
     TinyNNCuda.tnn_session_free(sess)
     out
+  end
+
+  def self.add(a, b)
+    sess = TinyNNCuda.tnn_session_new(1)
+    ta = TinyNNCuda.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tb = TinyNNCuda.tnn_input_2d_f32(sess, b.nrows, b.ncols)
+    tc = TinyNNCuda.tnn_add(sess, ta, tb)
+    TinyNNCuda.tnn_realize(sess, tc)
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_upload(sess, ta)
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, i, b.flat[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_upload(sess, tb)
+    TinyNNCuda.tnn_compute(sess)
+    TinyNNCuda.tnn_download(sess, tc)
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNNCuda.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNNCuda.tnn_session_free(sess)
+    out
+  end
+
+  def self.gelu(a)
+    sess = TinyNNCuda.tnn_session_new(1)
+    ta = TinyNNCuda.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tc = TinyNNCuda.tnn_gelu(sess, ta)
+    TinyNNCuda.tnn_realize(sess, tc)
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_upload(sess, ta)
+    TinyNNCuda.tnn_compute(sess)
+    TinyNNCuda.tnn_download(sess, tc)
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNNCuda.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNNCuda.tnn_session_free(sess)
+    out
+  end
+
+  def self.rms_norm(x, gamma, eps)
+    sess = TinyNNCuda.tnn_session_new(1)
+    tx = TinyNNCuda.tnn_input_2d_f32(sess, x.nrows, x.ncols)
+    tg = TinyNNCuda.tnn_input_2d_f32(sess, 1, x.ncols)
+    tc = TinyNNCuda.tnn_rms_norm(sess, tx, tg, eps)
+    TinyNNCuda.tnn_realize(sess, tc)
+    nx = x.nrows * x.ncols
+    i = 0
+    while i < nx
+      TinyNNCuda.tnn_scratch_set(sess, i, x.flat[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_upload(sess, tx)
+    i = 0
+    while i < x.ncols
+      TinyNNCuda.tnn_scratch_set(sess, i, gamma[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_upload(sess, tg)
+    TinyNNCuda.tnn_compute(sess)
+    TinyNNCuda.tnn_download(sess, tc)
+    out = Mat.new(x.nrows, x.ncols)
+    i = 0
+    while i < nx
+      out.flat[i] = TinyNNCuda.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNNCuda.tnn_session_free(sess)
+    out
+  end
+
+  def self.softmax(a)
+    sess = TinyNNCuda.tnn_session_new(1)
+    ta = TinyNNCuda.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tc = TinyNNCuda.tnn_softmax(sess, ta)
+    TinyNNCuda.tnn_realize(sess, tc)
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_upload(sess, ta)
+    TinyNNCuda.tnn_compute(sess)
+    TinyNNCuda.tnn_download(sess, tc)
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNNCuda.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNNCuda.tnn_session_free(sess)
+    out
+  end
+
+  def self.scale(a, s)
+    sess = TinyNNCuda.tnn_session_new(1)
+    ta = TinyNNCuda.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tc = TinyNNCuda.tnn_scale(sess, ta, s)
+    TinyNNCuda.tnn_realize(sess, tc)
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_upload(sess, ta)
+    TinyNNCuda.tnn_compute(sess)
+    TinyNNCuda.tnn_download(sess, tc)
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNNCuda.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNNCuda.tnn_session_free(sess)
+    out
+  end
+
+  # gelu(h * w1) * w2 chained via the persistent CUDA engine.
+  def self.ffn_pipeline(h, w1, w2)
+    pre    = TinyNNCuda.matmul(h, w1)
+    hidden = TinyNNCuda.gelu(pre)
+    TinyNNCuda.matmul(hidden, w2)
   end
 end
