@@ -11,48 +11,80 @@
 
 #define TNN_SCRATCH_BYTES (16 * 1024 * 1024)   /* 16 MiB: 4M f32 */
 
+/* Engine: persistent across the program's lifetime. Holds the backend
+ * objects + scheduler. Cached per (prefer_cuda) flavor so multiple
+ * session_new calls share one backend init. */
 typedef struct {
     ggml_backend_t       backend;        /* CUDA or CPU */
     ggml_backend_t       cpu_backend;    /* sched fallback when primary is CUDA */
     ggml_backend_sched_t sched;
+    const char          *backend_name;
+} tnn_engine;
+
+static tnn_engine *g_engine_cpu  = NULL;
+static tnn_engine *g_engine_cuda = NULL;
+
+static tnn_engine *tnn_engine_get(int prefer_cuda)
+{
+    tnn_engine **slot = prefer_cuda ? &g_engine_cuda : &g_engine_cpu;
+    if (*slot) return *slot;
+
+    ggml_backend_load_all();
+    tnn_engine *e = (tnn_engine *)calloc(1, sizeof(tnn_engine));
+    if (!e) return NULL;
+
+#ifdef TINYNN_HAVE_CUDA
+    if (prefer_cuda) {
+        e->backend = ggml_backend_cuda_init(0);
+        e->backend_name = "cuda";
+    }
+#endif
+    if (!e->backend) {
+        e->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+        e->backend_name = "cpu";
+    }
+    if (!e->backend) { free(e); return NULL; }
+
+    e->cpu_backend = (e->backend_name[0] == 'c' && e->backend_name[1] == 'p')
+        ? NULL
+        : ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+
+    ggml_backend_t backends[2];
+    int n_backends = 0;
+    backends[n_backends++] = e->backend;
+    if (e->cpu_backend) backends[n_backends++] = e->cpu_backend;
+    e->sched = ggml_backend_sched_new(backends, NULL, n_backends,
+                                       GGML_DEFAULT_GRAPH_SIZE, false, true);
+
+    *slot = e;
+    return e;
+}
+
+/* Session: per "compute frame" — owns its ctx + graph + scratch, but
+ * references a cached engine. tnn_session_free frees the per-frame
+ * resources only; the engine persists for reuse. */
+typedef struct {
+    tnn_engine          *engine;         /* unowned */
     struct ggml_context *ctx;            /* metadata only, no_alloc=true */
     struct ggml_cgraph  *graph;
     uint8_t             *ctx_buf;
     size_t               ctx_buf_size;
     float               *scratch;
     int                  realized;
-    const char          *backend_name;
 } tnn_session;
 
 void *tnn_session_new(int prefer_cuda)
 {
+    tnn_engine *e = tnn_engine_get(prefer_cuda);
+    if (!e) return NULL;
+
     tnn_session *s = (tnn_session *)calloc(1, sizeof(tnn_session));
     if (!s) return NULL;
+    s->engine = e;
 
-    ggml_backend_load_all();
-
-#ifdef TINYNN_HAVE_CUDA
-    if (prefer_cuda) {
-        s->backend = ggml_backend_cuda_init(0);
-        s->backend_name = "cuda";
-    }
-#endif
-    if (!s->backend) {
-        s->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
-        s->backend_name = "cpu";
-    }
-    if (!s->backend) { free(s); return NULL; }
-
-    s->cpu_backend = (s->backend_name[0] == 'c' && s->backend_name[1] == 'p')
-        ? NULL
-        : ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
-
-    ggml_backend_t backends[2];
-    int n_backends = 0;
-    backends[n_backends++] = s->backend;
-    if (s->cpu_backend) backends[n_backends++] = s->cpu_backend;
-    s->sched = ggml_backend_sched_new(backends, NULL, n_backends,
-                                       GGML_DEFAULT_GRAPH_SIZE, false, true);
+    /* Reset the (shared) scheduler so any prior allocation state is
+     * wiped before this session builds its graph. */
+    ggml_backend_sched_reset(e->sched);
 
     s->ctx_buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE
                       + ggml_graph_overhead();
@@ -74,19 +106,17 @@ void tnn_session_free(void *sess)
 {
     if (!sess) return;
     tnn_session *s = (tnn_session *)sess;
-    if (s->ctx)         ggml_free(s->ctx);
-    if (s->sched)       ggml_backend_sched_free(s->sched);
-    if (s->cpu_backend) ggml_backend_free(s->cpu_backend);
-    if (s->backend)     ggml_backend_free(s->backend);
+    if (s->ctx) ggml_free(s->ctx);
     free(s->ctx_buf);
     free(s->scratch);
     free(s);
+    /* Engine + sched are cached globally; do not free here. */
 }
 
 const char *tnn_backend_name(void *sess)
 {
     if (!sess) return "(null)";
-    return ((tnn_session *)sess)->backend_name;
+    return ((tnn_session *)sess)->engine->backend_name;
 }
 
 int tnn_link_check(void) { return 73; }
@@ -95,7 +125,8 @@ void *tnn_input_2d_f32(void *sess, int rows, int cols)
 {
     if (!sess || rows <= 0 || cols <= 0) return NULL;
     tnn_session *s = (tnn_session *)sess;
-    return (void *)ggml_new_tensor_2d(s->ctx, GGML_TYPE_F32,
+    (void)s;   /* future: validate ctx hasn't been realized */
+    return (void *)ggml_new_tensor_2d(((tnn_session *)sess)->ctx, GGML_TYPE_F32,
                                        (int64_t)cols, (int64_t)rows);
 }
 
@@ -185,8 +216,8 @@ int tnn_realize(void *sess, void *result)
     tnn_session *s = (tnn_session *)sess;
     if (s->realized) return -2;
     ggml_build_forward_expand(s->graph, (struct ggml_tensor *)result);
-    ggml_backend_sched_reset(s->sched);
-    if (!ggml_backend_sched_alloc_graph(s->sched, s->graph)) return -3;
+    ggml_backend_sched_reset(s->engine->sched);
+    if (!ggml_backend_sched_alloc_graph(s->engine->sched, s->graph)) return -3;
     s->realized = 1;
     return 0;
 }
@@ -196,7 +227,7 @@ int tnn_compute(void *sess)
     if (!sess) return -1;
     tnn_session *s = (tnn_session *)sess;
     if (!s->realized) return -2;
-    enum ggml_status rc = ggml_backend_sched_graph_compute(s->sched, s->graph);
+    enum ggml_status rc = ggml_backend_sched_graph_compute(s->engine->sched, s->graph);
     return (rc == GGML_STATUS_SUCCESS) ? 0 : (int)rc;
 }
 

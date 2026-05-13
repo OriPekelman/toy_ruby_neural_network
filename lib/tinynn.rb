@@ -7,12 +7,12 @@
 #   require_relative "lib/transformer"   # defines Mat
 #   require_relative "lib/tinynn"        # adds TinyNN.matmul(a, b)
 #
-# TinyNN.matmul(a, b) computes a · b and returns a fresh Mat with the
+# TinyNN.matmul(a, b) computes a ** b and returns a fresh Mat with the
 # same row-major layout. Internally it spins up a one-shot ggml session,
 # uploads, computes, downloads, frees. Performance is bad for many small
 # calls (kernel-launch + backend-init per call); the eventual fix is to
-# share a persistent session across the training step. For S2 — a single
-# A/B smoke check — one-shot is fine.
+# share a persistent session across the training step. For S2 *** a single
+# A/B smoke check *** one-shot is fine.
 
 module TinyNN
   ffi_lib "tinynn_ggml"
@@ -47,13 +47,13 @@ module TinyNN
   ffi_func :tnn_tensor_ne0,       [:ptr],                   :int
   ffi_func :tnn_tensor_ne1,       [:ptr],                   :int
 
-  # a · b where both are project Mats (row-major f64). Returns a Mat
+  # a ** b where both are project Mats (row-major f64). Returns a Mat
   # (rows = a.nrows, cols = b.ncols).
   #
-  # Implementation note: ggml_mul_mat computes A · B^T. To get A · B we
-  # upload b TRANSPOSED — b is (br x bc) row-major; we present it to
+  # Implementation note: ggml_mul_mat computes A ** B^T. To get A ** B we
+  # upload b TRANSPOSED *** b is (br x bc) row-major; we present it to
   # ggml as a (bc x br) tensor whose rows are b's columns. Then ggml's
-  # A · B^T = A · B (because the "B^T" inside ggml lines up with the
+  # A ** B^T = A ** B (because the "B^T" inside ggml lines up with the
   # original b shape).
   def self.matmul(a, b)
     sess = TinyNN.tnn_session_new(0)   # 0 = CPU; flip to 1 for CUDA when built
@@ -267,7 +267,7 @@ module TinyNN
     TinyNN.tnn_compute(sess)
     TinyNN.tnn_download(sess, tc)
 
-    # Result shape: (a.ncols, a.nrows) — rows and cols swapped.
+    # Result shape: (a.ncols, a.nrows) *** rows and cols swapped.
     # ggml stores it contiguous after ggml_cont; row-major readout is
     # straightforward since the transposed tensor's ne0/ne1 already
     # match the target Mat's cols/rows.
@@ -286,6 +286,47 @@ module TinyNN
 
     TinyNN.tnn_session_free(sess)
     out
+  end
+
+  # Internal: stage b TRANSPOSED into scratch, then bulk-upload to `target`.
+  def self.stage_transposed_and_upload(sess, target, b)
+    br = b.nrows
+    bc = b.ncols
+    i = 0
+    while i < br
+      j = 0
+      while j < bc
+        TinyNN.tnn_scratch_set(sess, j * br + i, b.flat[i * bc + j])
+        j = j + 1
+      end
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, target)
+  end
+
+  # Internal: stage `m` row-major into scratch, then bulk-upload to `target`.
+  def self.stage_row_major_and_upload(sess, target, m)
+    n = m.nrows * m.ncols
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, m.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, target)
+  end
+
+  # FFN-shaped chain: result = gelu(h * w1) * w2.
+  #
+  # Calls three op-sized sessions, each reusing the cached engine (the
+  # backend + scheduler init runs once, not three times). One ggml-graph
+  # chaining is theoretically possible but needs explicit intermediate
+  # transposes because mul_mat's result has ne0 swapped relative to the
+  # next op's k-dim. Sticking to three sessions until we have a clean
+  # chain-friendly layout convention.
+  def self.ffn_pipeline(h, w1, w2)
+    pre    = TinyNN.matmul(h, w1)
+    hidden = TinyNN.gelu(pre)
+    TinyNN.matmul(hidden, w2)
   end
 
   # Element-wise a * s for scalar s. Returns a new Mat (out-of-place).

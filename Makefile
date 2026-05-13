@@ -98,12 +98,16 @@ ab-smoke-transpose: tinynn/ab_smoke_transpose
 ab-smoke-scale: tinynn/ab_smoke_scale
 	./tinynn/ab_smoke_scale
 
+# Chained-op pipeline: gelu(h·w1)·w2 in one ggml graph.
+ab-smoke-pipeline: tinynn/ab_smoke_pipeline
+	./tinynn/ab_smoke_pipeline
+
 # Run every CPU smoke. (CUDA variants would need `make setup-ggml-cuda` first.)
 # `ab-smoke-transpose` is omitted: ggml_cont(ggml_transpose(...)) trips
 # the scheduler's buffer allocation; we fold transposes into consuming
 # ops instead (see TinyNN.matmul's b-transposed upload).
 test: smoke ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm \
-       ab-smoke-softmax ab-smoke-scale
+       ab-smoke-softmax ab-smoke-scale ab-smoke-pipeline
 
 tinynn/ab_smoke: tinynn/ab_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke.rb -o tinynn/ab_smoke
@@ -126,6 +130,9 @@ tinynn/ab_smoke_transpose: tinynn/ab_smoke_transpose.rb lib/transformer.rb lib/t
 tinynn/ab_smoke_scale: tinynn/ab_smoke_scale.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_scale.rb -o tinynn/ab_smoke_scale
 
+tinynn/ab_smoke_pipeline: tinynn/ab_smoke_pipeline.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_pipeline.rb -o tinynn/ab_smoke_pipeline
+
 # A/B parity test against CUDA backend on the local GPU (sm_121 / GB10).
 # Requires `make setup-ggml-cuda` to have produced vendor/ggml/build-cuda.
 ab-smoke-cuda: tinynn/ab_smoke_cuda
@@ -147,7 +154,8 @@ clean:
 	      tinynn/tinynn_ggml_cuda.o tinynn/libtinynn_ggml_cuda.a \
 	      tinynn/smoke tinynn/ab_smoke tinynn/ab_smoke_cuda \
 	      tinynn/ab_smoke_add tinynn/ab_smoke_gelu tinynn/ab_smoke_rms_norm \
-	      tinynn/ab_smoke_softmax tinynn/ab_smoke_transpose tinynn/ab_smoke_scale
+	      tinynn/ab_smoke_softmax tinynn/ab_smoke_transpose tinynn/ab_smoke_scale \
+	      tinynn/ab_smoke_pipeline
 
 distclean: clean
 	rm -rf $(GGML_DIR)/build $(GGML_DIR)/build-cuda
@@ -155,4 +163,4 @@ distclean: clean
 .PHONY: all clean distclean setup-ggml setup-ggml-cuda smoke \
         ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm \
         ab-smoke-softmax ab-smoke-transpose ab-smoke-scale \
-        ab-smoke-cuda test
+        ab-smoke-pipeline ab-smoke-cuda test
