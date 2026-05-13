@@ -14,6 +14,24 @@
 # share a persistent session across the training step. For S2 *** a single
 # A/B smoke check *** one-shot is fine.
 
+# Holder for adam_step's three return values. (Spinel doesn't reliably
+# handle tuple/array returns of mixed-shape Mats — same workaround as
+# lib/transformer.rb's NormResult/FFResult/etc.)
+#
+# Field names deliberately avoid `m`/`v` to dodge a name collision with
+# AdamState.m / AdamState.v in lib/transformer.rb — Spinel's iterative
+# type inference unifies field types by name, and AdamState.m holds a
+# Gradients (not a Mat), so naming the field `m` here makes the codegen
+# mistype this slot.
+class AdamStepResult
+  attr_accessor :param, :mom_m, :mom_v
+  def initialize(param, mom_m, mom_v)
+    @param = param
+    @mom_m = mom_m
+    @mom_v = mom_v
+  end
+end
+
 module TinyNN
   ffi_lib "tinynn_ggml"
   ffi_lib "ggml"
@@ -44,6 +62,7 @@ module TinyNN
   ffi_func :tnn_get_rows_back,    [:ptr, :ptr, :ptr, :ptr], :ptr
   ffi_func :tnn_input_1d_i32,     [:ptr, :int],             :ptr
   ffi_func :tnn_gelu_back_scratch,[:ptr, :int],             :void
+  ffi_func :tnn_adam_step_scratch,[:ptr, :int, :double, :double, :double, :double, :double, :double], :void
   ffi_func :tnn_scratch_set_i32,  [:ptr, :int, :int],       :void
   ffi_func :tnn_scratch_get_i32,  [:ptr, :int],             :int
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int
@@ -513,6 +532,85 @@ module TinyNN
     end
     TinyNN.tnn_session_free(sess)
     out
+  end
+
+  # Fused softmax-cross-entropy gradient:
+  #   dlogits[i, v] = (softmax(logits)[i, v] - one_hot(targets[i])[v]) / n_pred
+  #
+  # Composable from existing ops:
+  #   sm  = softmax(logits)
+  #   oh  = one_hot mat (built on the Ruby side; cheap — n_pred sets)
+  #   dlg = (sm - oh) / n_pred = scale(sm, 1/n_pred) + scale(oh, -1/n_pred)
+  #
+  # `logits` is (n_pred, vocab); `targets` is Array<Int> of length n_pred
+  # where targets[i] in [0, vocab) is the desired class at row i.
+  def self.cross_entropy_grad(logits, targets, n_pred)
+    # 1. one-hot in Ruby.
+    oh = Mat.new(logits.nrows, logits.ncols)
+    i = 0
+    while i < n_pred
+      oh.flat[i * logits.ncols + targets[i]] = 1.0
+      i = i + 1
+    end
+    # 2. softmax + scale + scale + add through FFI.
+    sm = TinyNN.softmax(logits)
+    inv_n = 1.0 / n_pred.to_f
+    sm_s  = TinyNN.scale(sm, inv_n)
+    oh_s  = TinyNN.scale(oh, -inv_n)
+    TinyNN.add(sm_s, oh_s)
+  end
+
+  # Adam optimizer step. Matches the project's adam_step_mat.
+  #
+  # Returns three new Mats: [param_new, m_new, v_new]. Caller is
+  # responsible for swapping them back into wherever they came from
+  # (no persistent storage yet — once persistent sessions are wired
+  # into transformer.rb, m/v can stay on-device).
+  #
+  # omc1, omc2 are pre-computed bias-correction divisors:
+  #   omc1 = 1 - beta1^t,  omc2 = 1 - beta2^t
+  # where t is the step number. (The project tracks them as running
+  # products in AdamState.bc1 / bc2; both conventions work.)
+  def self.adam_step(param, grad, m, v, lr, b1, b2, eps, omc1, omc2)
+    sess = TinyNN.tnn_session_new(0)
+    n = param.nrows * param.ncols
+    # Stage param at [0..n), grad at [n..2n), m at [2n..3n), v at [3n..4n).
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, param.flat[i])
+      i = i + 1
+    end
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, n + i, grad.flat[i])
+      i = i + 1
+    end
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, 2 * n + i, m.flat[i])
+      i = i + 1
+    end
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, 3 * n + i, v.flat[i])
+      i = i + 1
+    end
+
+    TinyNN.tnn_adam_step_scratch(sess, n, lr, b1, b2, eps, omc1, omc2)
+
+    new_param = Mat.new(param.nrows, param.ncols)
+    new_mom_m = Mat.new(param.nrows, param.ncols)
+    new_mom_v = Mat.new(param.nrows, param.ncols)
+    i = 0
+    while i < n
+      new_param.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      new_mom_m.flat[i] = TinyNN.tnn_scratch_get(sess, 2 * n + i)
+      new_mom_v.flat[i] = TinyNN.tnn_scratch_get(sess, 3 * n + i)
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    AdamStepResult.new(new_param, new_mom_m, new_mom_v)
   end
 
   # SGD parameter update: param_new = param - lr * grad.

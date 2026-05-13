@@ -60,6 +60,19 @@ void  *tnn_input_1d_i32(void *sess, int n);             /* int32 vector input (f
  */
 void   tnn_gelu_back_scratch(void *sess, int n);
 
+/* Adam optimizer step (matches the project's adam_step_mat).
+ * Scratch layout: [0..n) param, [n..2n) grad, [2n..3n) m, [3n..4n) v.
+ * Updates all four in place:
+ *   m_new = b1*m + (1-b1)*g
+ *   v_new = b2*v + (1-b2)*g*g
+ *   m_hat = m_new / omc1, v_hat = v_new / omc2
+ *   param -= lr * m_hat / (sqrt(v_hat) + eps)
+ * After return, read back scratch[0..n) (param), [2n..3n) (m), [3n..4n) (v).
+ */
+void   tnn_adam_step_scratch(void *sess, int n,
+                              double lr, double b1, double b2, double eps,
+                              double omc1, double omc2);
+
 /* Realize the graph (allocates all tensors on the backend). Must be
  * called once after all ops are declared and before any upload. */
 int    tnn_realize(void *sess, void *result);

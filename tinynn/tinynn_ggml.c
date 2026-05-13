@@ -284,6 +284,41 @@ void tnn_gelu_back_scratch(void *sess, int n)
     }
 }
 
+void tnn_adam_step_scratch(void *sess, int n,
+                            double lr, double b1, double b2, double eps,
+                            double omc1, double omc2)
+{
+    if (!sess || n <= 0) return;
+    tnn_session *s = (tnn_session *)sess;
+    int max_slots = TNN_SCRATCH_BYTES / (int)sizeof(float);
+    if (4 * n > max_slots) return;
+
+    float *p = s->scratch + 0;
+    const float *g = s->scratch + n;
+    float *m = s->scratch + 2 * n;
+    float *v = s->scratch + 3 * n;
+
+    const float one_minus_b1 = (float)(1.0 - b1);
+    const float one_minus_b2 = (float)(1.0 - b2);
+    const float fb1   = (float)b1;
+    const float fb2   = (float)b2;
+    const float flr   = (float)lr;
+    const float feps  = (float)eps;
+    const float fomc1 = (float)omc1;
+    const float fomc2 = (float)omc2;
+
+    for (int i = 0; i < n; ++i) {
+        float gi = g[i];
+        float new_m = fb1 * m[i] + one_minus_b1 * gi;
+        float new_v = fb2 * v[i] + one_minus_b2 * gi * gi;
+        m[i] = new_m;
+        v[i] = new_v;
+        float m_hat = new_m / fomc1;
+        float v_hat = new_v / fomc2;
+        p[i] = p[i] - flr * m_hat / (sqrtf(v_hat) + feps);
+    }
+}
+
 int tnn_realize(void *sess, void *result)
 {
     if (!sess || !result) return -1;

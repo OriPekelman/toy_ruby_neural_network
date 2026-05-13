@@ -109,7 +109,7 @@ ab-smoke-pipeline: tinynn/ab_smoke_pipeline
 test: smoke ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm \
        ab-smoke-softmax ab-smoke-scale ab-smoke-pipeline \
        ab-smoke-matmul-variants ab-smoke-back ab-smoke-embed ab-smoke-sgd \
-       ab-smoke-gelu-back
+       ab-smoke-gelu-back ab-smoke-cegrad ab-smoke-adam
 
 tinynn/ab_smoke: tinynn/ab_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke.rb -o tinynn/ab_smoke
@@ -159,6 +159,18 @@ ab-smoke-gelu-back: tinynn/ab_smoke_gelu_back
 
 tinynn/ab_smoke_gelu_back: tinynn/ab_smoke_gelu_back.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_gelu_back.rb -o tinynn/ab_smoke_gelu_back
+
+ab-smoke-cegrad: tinynn/ab_smoke_cegrad
+	./tinynn/ab_smoke_cegrad
+
+tinynn/ab_smoke_cegrad: tinynn/ab_smoke_cegrad.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_cegrad.rb -o tinynn/ab_smoke_cegrad
+
+ab-smoke-adam: tinynn/ab_smoke_adam
+	./tinynn/ab_smoke_adam
+
+tinynn/ab_smoke_adam: tinynn/ab_smoke_adam.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_adam.rb -o tinynn/ab_smoke_adam
 
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed
@@ -236,7 +248,8 @@ clean:
 	      tinynn/ab_smoke_softmax tinynn/ab_smoke_transpose tinynn/ab_smoke_scale \
 	      tinynn/ab_smoke_pipeline tinynn/ab_smoke_big tinynn/ab_smoke_big_cuda \
 	      tinynn/ab_smoke_matmul_variants tinynn/ab_smoke_back tinynn/ab_smoke_embed \
-	      tinynn/ab_smoke_sgd tinynn/ab_smoke_gelu_back tinynn/forward_smoke tinynn/persistent_bench \
+	      tinynn/ab_smoke_sgd tinynn/ab_smoke_gelu_back tinynn/ab_smoke_cegrad \
+	      tinynn/ab_smoke_adam tinynn/forward_smoke tinynn/persistent_bench \
 	      tinynn/persistent_bench_cuda tinynn/persistent_bench_big
 
 distclean: clean
