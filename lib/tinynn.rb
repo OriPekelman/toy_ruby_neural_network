@@ -35,6 +35,9 @@ module TinyNN
   ffi_func :tnn_add,              [:ptr, :ptr, :ptr],       :ptr
   ffi_func :tnn_gelu,             [:ptr, :ptr],             :ptr
   ffi_func :tnn_rms_norm,         [:ptr, :ptr, :ptr, :double], :ptr
+  ffi_func :tnn_softmax,          [:ptr, :ptr],             :ptr
+  ffi_func :tnn_transpose,        [:ptr, :ptr],             :ptr
+  ffi_func :tnn_scale,            [:ptr, :ptr, :double],    :ptr
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int
   ffi_func :tnn_compute,          [:ptr],                   :int
   ffi_func :tnn_scratch_set,      [:ptr, :int, :double],    :void
@@ -209,6 +212,103 @@ module TinyNN
     out = Mat.new(x.nrows, x.ncols)
     i = 0
     while i < nx
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # Per-row softmax. Matches the project's softmax_rows! (out-of-place).
+  def self.softmax(a)
+    sess = TinyNN.tnn_session_new(0)
+    ta = TinyNN.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tc = TinyNN.tnn_softmax(sess, ta)
+    TinyNN.tnn_realize(sess, tc)
+
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, ta)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # Transpose. Returns a Mat with rows/cols swapped.
+  def self.transpose(a)
+    sess = TinyNN.tnn_session_new(0)
+    ta = TinyNN.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tc = TinyNN.tnn_transpose(sess, ta)
+    TinyNN.tnn_realize(sess, tc)
+
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, ta)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    # Result shape: (a.ncols, a.nrows) — rows and cols swapped.
+    # ggml stores it contiguous after ggml_cont; row-major readout is
+    # straightforward since the transposed tensor's ne0/ne1 already
+    # match the target Mat's cols/rows.
+    out = Mat.new(a.ncols, a.nrows)
+    rin  = a.nrows
+    cin  = a.ncols
+    i = 0
+    while i < cin
+      j = 0
+      while j < rin
+        out.flat[i * rin + j] = TinyNN.tnn_scratch_get(sess, i * rin + j)
+        j = j + 1
+      end
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # Element-wise a * s for scalar s. Returns a new Mat (out-of-place).
+  def self.scale(a, s)
+    sess = TinyNN.tnn_session_new(0)
+    ta = TinyNN.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tc = TinyNN.tnn_scale(sess, ta, s)
+    TinyNN.tnn_realize(sess, tc)
+
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, ta)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
       out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
       i = i + 1
     end

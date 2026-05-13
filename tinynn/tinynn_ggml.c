@@ -152,6 +152,33 @@ void *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps)
     return (void *)ggml_mul(s->ctx, normed, (struct ggml_tensor *)gamma_row);
 }
 
+void *tnn_softmax(void *sess, void *a)
+{
+    if (!sess || !a) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    /* ggml_soft_max normalizes along ne[0]. With our convention
+     * (ne0=cols, ne1=rows) this is per-row softmax, matching the
+     * project's softmax_rows!. */
+    return (void *)ggml_soft_max(s->ctx, (struct ggml_tensor *)a);
+}
+
+void *tnn_transpose(void *sess, void *a)
+{
+    if (!sess || !a) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    /* ggml_transpose is a stride-permutation view (no data movement).
+     * Wrap in ggml_cont so the result is contiguous f32 and downloadable. */
+    return (void *)ggml_cont(s->ctx,
+                              ggml_transpose(s->ctx, (struct ggml_tensor *)a));
+}
+
+void *tnn_scale(void *sess, void *a, double scale)
+{
+    if (!sess || !a) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_scale(s->ctx, (struct ggml_tensor *)a, (float)scale);
+}
+
 int tnn_realize(void *sess, void *result)
 {
     if (!sess || !result) return -1;

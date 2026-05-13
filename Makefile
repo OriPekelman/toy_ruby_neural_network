@@ -89,8 +89,21 @@ ab-smoke-gelu: tinynn/ab_smoke_gelu
 ab-smoke-rms-norm: tinynn/ab_smoke_rms_norm
 	./tinynn/ab_smoke_rms_norm
 
+ab-smoke-softmax: tinynn/ab_smoke_softmax
+	./tinynn/ab_smoke_softmax
+
+ab-smoke-transpose: tinynn/ab_smoke_transpose
+	./tinynn/ab_smoke_transpose
+
+ab-smoke-scale: tinynn/ab_smoke_scale
+	./tinynn/ab_smoke_scale
+
 # Run every CPU smoke. (CUDA variants would need `make setup-ggml-cuda` first.)
-test: smoke ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm
+# `ab-smoke-transpose` is omitted: ggml_cont(ggml_transpose(...)) trips
+# the scheduler's buffer allocation; we fold transposes into consuming
+# ops instead (see TinyNN.matmul's b-transposed upload).
+test: smoke ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm \
+       ab-smoke-softmax ab-smoke-scale
 
 tinynn/ab_smoke: tinynn/ab_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke.rb -o tinynn/ab_smoke
@@ -103,6 +116,15 @@ tinynn/ab_smoke_gelu: tinynn/ab_smoke_gelu.rb lib/transformer.rb lib/tinynn.rb t
 
 tinynn/ab_smoke_rms_norm: tinynn/ab_smoke_rms_norm.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_rms_norm.rb -o tinynn/ab_smoke_rms_norm
+
+tinynn/ab_smoke_softmax: tinynn/ab_smoke_softmax.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_softmax.rb -o tinynn/ab_smoke_softmax
+
+tinynn/ab_smoke_transpose: tinynn/ab_smoke_transpose.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_transpose.rb -o tinynn/ab_smoke_transpose
+
+tinynn/ab_smoke_scale: tinynn/ab_smoke_scale.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_scale.rb -o tinynn/ab_smoke_scale
 
 # A/B parity test against CUDA backend on the local GPU (sm_121 / GB10).
 # Requires `make setup-ggml-cuda` to have produced vendor/ggml/build-cuda.
@@ -124,10 +146,13 @@ clean:
 	      tinynn/tinynn_ggml.o tinynn/libtinynn_ggml.a \
 	      tinynn/tinynn_ggml_cuda.o tinynn/libtinynn_ggml_cuda.a \
 	      tinynn/smoke tinynn/ab_smoke tinynn/ab_smoke_cuda \
-	      tinynn/ab_smoke_add tinynn/ab_smoke_gelu tinynn/ab_smoke_rms_norm
+	      tinynn/ab_smoke_add tinynn/ab_smoke_gelu tinynn/ab_smoke_rms_norm \
+	      tinynn/ab_smoke_softmax tinynn/ab_smoke_transpose tinynn/ab_smoke_scale
 
 distclean: clean
 	rm -rf $(GGML_DIR)/build $(GGML_DIR)/build-cuda
 
 .PHONY: all clean distclean setup-ggml setup-ggml-cuda smoke \
-        ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm ab-smoke-cuda test
+        ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm \
+        ab-smoke-softmax ab-smoke-transpose ab-smoke-scale \
+        ab-smoke-cuda test

@@ -17,6 +17,9 @@ tinynn/ab_smoke
 tinynn/ab_smoke_add
 tinynn/ab_smoke_gelu
 tinynn/ab_smoke_rms_norm
+tinynn/ab_smoke_softmax
+tinynn/ab_smoke_transpose
+tinynn/ab_smoke_scale
 tinynn/ab_smoke_cuda
 
 # Vendored ggml source + build dirs (re-clone via `make setup-ggml`)

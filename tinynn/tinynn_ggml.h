@@ -36,6 +36,9 @@ void  *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps);
                                                          /* RMSNorm(x) * gamma_row, last-dim normalize, broadcast over the leading dim.
                                                             x: (n1, n0) with ne0=feature, ne1=batch_or_T
                                                             gamma_row: (1, n0) — a 1xfeature tensor */
+void  *tnn_softmax(void *sess, void *a);                /* per-row softmax along ne[0] */
+void  *tnn_transpose(void *sess, void *a);              /* materialised transpose: (rows,cols) → (cols,rows) */
+void  *tnn_scale(void *sess, void *a, double s);        /* element-wise a * s */
 
 /* Realize the graph (allocates all tensors on the backend). Must be
  * called once after all ops are declared and before any upload. */
