@@ -1,0 +1,63 @@
+#ifndef TINYNN_GGML_H
+#define TINYNN_GGML_H
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Spinel-friendly C shim over ggml. Backend-aware (CPU now; CUDA when
+ * compiled with -DTINYNN_HAVE_CUDA against the ggml-cuda build).
+ *
+ * Tensor lifetime: tied to the session. tnn_session_free disposes all
+ * tensors created via the session.
+ *
+ * Result-shape convention for matmul: ggml's mul_mat result is
+ * (ne0=m, ne1=n) where m = rows of A and n = rows of B (A,B given as
+ * ne0=k, ne1=rows). Reading the logical (m,n) row-major result: index
+ * scratch[j*m + i] after tnn_tensor_pull. The Ruby side does the swap.
+ */
+
+void  *tnn_session_new(int prefer_cuda);     /* 0 = CPU only, 1 = CUDA if compiled in */
+void   tnn_session_free(void *sess);
+
+const char *tnn_backend_name(void *sess);
+int    tnn_link_check(void);                 /* returns 73 */
+
+/* Build phase: declare tensors and ops, then realize.
+ * Tensors are created before tnn_realize; backend storage is allocated then. */
+void  *tnn_input_2d_f32(void *sess, int rows, int cols);
+void  *tnn_matmul(void *sess, void *a, void *b);        /* A * B^T (ggml-native) */
+void  *tnn_matmul_axb(void *sess, void *a, void *b);    /* A * B  (transposes B internally) */
+
+/* Realize the graph (allocates all tensors on the backend). Must be
+ * called once after all ops are declared and before any upload. */
+int    tnn_realize(void *sess, void *result);
+
+/* Compute the (already-built) graph. Must be called after upload. */
+int    tnn_compute(void *sess);
+
+/* Bulk upload/download via a session-owned scratch buffer (16 MiB).
+ *   - tnn_scratch_set(sess, idx, value) fills scratch element by element
+ *     (per-element FFI call; cheap on the Ruby side).
+ *   - tnn_upload(sess, tensor) bulk-copies the staged data into the
+ *     backend buffer (single backend_tensor_set => one cudaMemcpy).
+ *   - tnn_download(sess, tensor) pulls in the other direction.
+ *   - tnn_scratch_get reads from the host shadow.
+ */
+void   tnn_scratch_set(void *sess, int idx, double v);
+double tnn_scratch_get(void *sess, int idx);
+int    tnn_upload(void *sess, void *tensor);
+int    tnn_download(void *sess, void *tensor);
+
+int    tnn_tensor_ne0(void *t);
+int    tnn_tensor_ne1(void *t);
+size_t tnn_tensor_nbytes(void *t);
+int    tnn_tensor_nelements(void *t);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

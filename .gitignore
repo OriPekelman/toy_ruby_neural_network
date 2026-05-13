@@ -2,8 +2,17 @@
 train_minimal
 train_tinystories
 
-# Generated C from `spinel -c`
-*.c
+# Generated C from `spinel -c` at the repo root only — the tinynn/ shim
+# has hand-written .c sources that must stay tracked.
+/*.c
 
 # Generated tokenized corpus (recreate with prep/prep_tinystories.rb)
 data/ts_*.txt
+
+# tinynn shim build artifacts
+tinynn/*.o
+tinynn/*.a
+tinynn/smoke
+
+# Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
+vendor/
