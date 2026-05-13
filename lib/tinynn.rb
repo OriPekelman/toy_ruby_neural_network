@@ -32,6 +32,9 @@ module TinyNN
   ffi_func :tnn_backend_name,     [:ptr],                   :str
   ffi_func :tnn_input_2d_f32,     [:ptr, :int, :int],       :ptr
   ffi_func :tnn_matmul,           [:ptr, :ptr, :ptr],       :ptr
+  ffi_func :tnn_add,              [:ptr, :ptr, :ptr],       :ptr
+  ffi_func :tnn_gelu,             [:ptr, :ptr],             :ptr
+  ffi_func :tnn_rms_norm,         [:ptr, :ptr, :ptr, :double], :ptr
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int
   ffi_func :tnn_compute,          [:ptr],                   :int
   ffi_func :tnn_scratch_set,      [:ptr, :int, :double],    :void
@@ -96,6 +99,117 @@ module TinyNN
         out.flat[i * n + j] = TinyNN.tnn_scratch_get(sess, j * m + i)
         j = j + 1
       end
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # Element-wise a + b. Both Mats must have the same shape.
+  def self.add(a, b)
+    sess = TinyNN.tnn_session_new(0)
+    ta = TinyNN.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tb = TinyNN.tnn_input_2d_f32(sess, b.nrows, b.ncols)
+    tc = TinyNN.tnn_add(sess, ta, tb)
+    TinyNN.tnn_realize(sess, tc)
+
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, ta)
+
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, b.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, tb)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    # Result is row-major same shape as a (ne0=cols, ne1=rows, flat
+    # is row-major already since ggml_add preserves layout).
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # Element-wise GeLU (tanh approximation, matches project's feed_forward).
+  def self.gelu(a)
+    sess = TinyNN.tnn_session_new(0)
+    ta = TinyNN.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tc = TinyNN.tnn_gelu(sess, ta)
+    TinyNN.tnn_realize(sess, tc)
+
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, ta)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # RMSNorm(x) * gamma. x is (T, d_model), gamma is Array<Float> of
+  # length d_model. eps defaults to 1e-5 (matches the project's
+  # rms_norm helper).
+  def self.rms_norm(x, gamma, eps)
+    sess = TinyNN.tnn_session_new(0)
+    tx = TinyNN.tnn_input_2d_f32(sess, x.nrows, x.ncols)
+    # gamma as a 1-row tensor: shape (1, d_model). ggml will broadcast
+    # across x's leading dimension during the mul.
+    tg = TinyNN.tnn_input_2d_f32(sess, 1, x.ncols)
+    tc = TinyNN.tnn_rms_norm(sess, tx, tg, eps)
+    TinyNN.tnn_realize(sess, tc)
+
+    # Upload x.
+    nx = x.nrows * x.ncols
+    i = 0
+    while i < nx
+      TinyNN.tnn_scratch_set(sess, i, x.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, tx)
+
+    # Upload gamma (length d_model).
+    i = 0
+    while i < x.ncols
+      TinyNN.tnn_scratch_set(sess, i, gamma[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, tg)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    out = Mat.new(x.nrows, x.ncols)
+    i = 0
+    while i < nx
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
       i = i + 1
     end
 

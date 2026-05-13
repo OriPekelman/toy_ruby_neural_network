@@ -30,6 +30,12 @@ int    tnn_link_check(void);                 /* returns 73 */
 void  *tnn_input_2d_f32(void *sess, int rows, int cols);
 void  *tnn_matmul(void *sess, void *a, void *b);        /* A * B^T (ggml-native) */
 void  *tnn_matmul_axb(void *sess, void *a, void *b);    /* A * B  (transposes B internally) */
+void  *tnn_add(void *sess, void *a, void *b);           /* element-wise A + B (same shape) */
+void  *tnn_gelu(void *sess, void *a);                   /* element-wise GeLU (tanh approx) */
+void  *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps);
+                                                         /* RMSNorm(x) * gamma_row, last-dim normalize, broadcast over the leading dim.
+                                                            x: (n1, n0) with ne0=feature, ne1=batch_or_T
+                                                            gamma_row: (1, n0) — a 1xfeature tensor */
 
 /* Realize the graph (allocates all tensors on the backend). Must be
  * called once after all ops are declared and before any upload. */

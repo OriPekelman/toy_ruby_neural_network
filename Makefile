@@ -76,12 +76,33 @@ smoke: tinynn/smoke
 tinynn/smoke: tinynn/smoke.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/smoke.rb -o tinynn/smoke
 
-# A/B parity test: native Mat#matmul vs TinyNN.matmul (FFI, CPU).
+# A/B parity tests: native vs FFI (CPU) for one op each.
 ab-smoke: tinynn/ab_smoke
 	./tinynn/ab_smoke
 
+ab-smoke-add: tinynn/ab_smoke_add
+	./tinynn/ab_smoke_add
+
+ab-smoke-gelu: tinynn/ab_smoke_gelu
+	./tinynn/ab_smoke_gelu
+
+ab-smoke-rms-norm: tinynn/ab_smoke_rms_norm
+	./tinynn/ab_smoke_rms_norm
+
+# Run every CPU smoke. (CUDA variants would need `make setup-ggml-cuda` first.)
+test: smoke ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm
+
 tinynn/ab_smoke: tinynn/ab_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke.rb -o tinynn/ab_smoke
+
+tinynn/ab_smoke_add: tinynn/ab_smoke_add.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_add.rb -o tinynn/ab_smoke_add
+
+tinynn/ab_smoke_gelu: tinynn/ab_smoke_gelu.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_gelu.rb -o tinynn/ab_smoke_gelu
+
+tinynn/ab_smoke_rms_norm: tinynn/ab_smoke_rms_norm.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_rms_norm.rb -o tinynn/ab_smoke_rms_norm
 
 # A/B parity test against CUDA backend on the local GPU (sm_121 / GB10).
 # Requires `make setup-ggml-cuda` to have produced vendor/ggml/build-cuda.
@@ -102,9 +123,11 @@ clean:
 	rm -f train_minimal train_tinystories \
 	      tinynn/tinynn_ggml.o tinynn/libtinynn_ggml.a \
 	      tinynn/tinynn_ggml_cuda.o tinynn/libtinynn_ggml_cuda.a \
-	      tinynn/smoke tinynn/ab_smoke tinynn/ab_smoke_cuda
+	      tinynn/smoke tinynn/ab_smoke tinynn/ab_smoke_cuda \
+	      tinynn/ab_smoke_add tinynn/ab_smoke_gelu tinynn/ab_smoke_rms_norm
 
 distclean: clean
 	rm -rf $(GGML_DIR)/build $(GGML_DIR)/build-cuda
 
-.PHONY: all clean distclean setup-ggml setup-ggml-cuda smoke
+.PHONY: all clean distclean setup-ggml setup-ggml-cuda smoke \
+        ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm ab-smoke-cuda test

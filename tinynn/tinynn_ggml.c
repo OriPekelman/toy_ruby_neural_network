@@ -120,6 +120,38 @@ void *tnn_matmul_axb(void *sess, void *a, void *b)
     return (void *)ggml_mul_mat(s->ctx, (struct ggml_tensor *)a, bT);
 }
 
+void *tnn_add(void *sess, void *a, void *b)
+{
+    if (!sess || !a || !b) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_add(s->ctx,
+                             (struct ggml_tensor *)a,
+                             (struct ggml_tensor *)b);
+}
+
+void *tnn_gelu(void *sess, void *a)
+{
+    if (!sess || !a) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    /* ggml_gelu uses the tanh approximation:
+     *   0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
+     * which matches the project's feed_forward GeLU exactly. */
+    return (void *)ggml_gelu(s->ctx, (struct ggml_tensor *)a);
+}
+
+void *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps)
+{
+    if (!sess || !x || !gamma_row) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    /* ggml_rms_norm normalizes along ne[0] (the feature dim). The result
+     * is the unscaled normalized tensor; we then multiply by gamma_row
+     * (shape 1 x feature) which ggml_mul broadcasts over the leading dim. */
+    struct ggml_tensor *normed = ggml_rms_norm(s->ctx,
+                                                (struct ggml_tensor *)x,
+                                                (float)eps);
+    return (void *)ggml_mul(s->ctx, normed, (struct ggml_tensor *)gamma_row);
+}
+
 int tnn_realize(void *sess, void *result)
 {
     if (!sess || !result) return -1;

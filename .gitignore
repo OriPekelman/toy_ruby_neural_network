@@ -14,6 +14,9 @@ tinynn/*.o
 tinynn/*.a
 tinynn/smoke
 tinynn/ab_smoke
+tinynn/ab_smoke_add
+tinynn/ab_smoke_gelu
+tinynn/ab_smoke_rms_norm
 tinynn/ab_smoke_cuda
 
 # Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
