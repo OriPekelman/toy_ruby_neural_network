@@ -30,6 +30,7 @@ tinynn/ab_smoke_sgd
 tinynn/forward_smoke
 tinynn/persistent_bench
 tinynn/persistent_bench_cuda
+tinynn/persistent_bench_big
 tinynn/ab_smoke_cuda
 tinynn/ab_smoke_all_cuda
 
