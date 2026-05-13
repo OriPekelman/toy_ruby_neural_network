@@ -143,6 +143,149 @@ cmp("softmax", softmax_native(sm), TinyNNCuda.softmax(sm), 1.0e-4)
 # --- scale: 2x3 ---
 cmp("scale",   scale_native(a, 0.5), TinyNNCuda.scale(a, 0.5), 1.0e-5)
 
+# --- matmul_t: (3,4) and (5,4) -> (3,5) ---
+mata = Mat.new(3, 4)
+matb = Mat.new(5, 4)
+i = 0
+while i < 12
+  mata.flat[i] = i.to_f * 0.1 - 0.5
+  i = i + 1
+end
+i = 0
+while i < 20
+  matb.flat[i] = i.to_f * 0.07 - 0.4
+  i = i + 1
+end
+cmp("matmul_t", mata.matmul_t(matb), TinyNNCuda.matmul_t(mata, matb), 1.0e-3)
+
+# --- t_matmul: (4,3) and (4,5) -> (3,5) ---
+mata2 = Mat.new(4, 3)
+matbt = Mat.new(4, 5)
+i = 0
+while i < 12
+  mata2.flat[i] = i.to_f * 0.13 - 0.4
+  i = i + 1
+end
+i = 0
+while i < 20
+  matbt.flat[i] = i.to_f * 0.09 - 0.3
+  i = i + 1
+end
+cmp("t_matmul", mata2.t_matmul(matbt), TinyNNCuda.t_matmul(mata2, matbt), 1.0e-3)
+
+# --- softmax_back: (3, 4) ---
+xsm = Mat.new(3, 4)
+i = 0
+while i < 12
+  xsm.flat[i] = (i.to_f * 0.4 - 2.0)
+  i = i + 1
+end
+a_out = TinyNNCuda.softmax(xsm)
+dysm = Mat.new(3, 4)
+i = 0
+while i < 12
+  dysm.flat[i] = (i.to_f * 0.2 - 1.0)
+  i = i + 1
+end
+# Native softmax-back reference.
+def softmax_back_native(soft, dy)
+  out = Mat.new(soft.nrows, soft.ncols)
+  r = 0
+  while r < soft.nrows
+    nc = soft.ncols
+    dot = 0.0
+    c = 0
+    while c < nc
+      dot = dot + soft.flat[r * nc + c] * dy.flat[r * nc + c]
+      c = c + 1
+    end
+    c = 0
+    while c < nc
+      ai = soft.flat[r * nc + c]
+      di = dy.flat[r * nc + c]
+      out.flat[r * nc + c] = ai * (di - dot)
+      c = c + 1
+    end
+    r = r + 1
+  end
+  out
+end
+cmp("softmax_back", softmax_back_native(a_out, dysm), TinyNNCuda.softmax_back(a_out, dysm), 1.0e-3)
+
+# --- embed_lookup + embed_back ---
+tab = Mat.new(5, 3)
+i = 0
+while i < 5
+  c = 0
+  while c < 3
+    tab.flat[i * 3 + c] = (i * 10 + c).to_f
+    c = c + 1
+  end
+  i = i + 1
+end
+idx_arr = [2, 0, 4, 2]
+def embed_lookup_native(t, idx)
+  d = t.ncols
+  n = idx.length
+  out = Mat.new(n, d)
+  i = 0
+  while i < n
+    tok = idx[i]
+    c = 0
+    while c < d
+      out.flat[i * d + c] = t.flat[tok * d + c]
+      c = c + 1
+    end
+    i = i + 1
+  end
+  out
+end
+def embed_back_native(d_out, idx, vocab)
+  d = d_out.ncols
+  n = idx.length
+  out = Mat.new(vocab, d)
+  i = 0
+  while i < n
+    tok = idx[i]
+    c = 0
+    while c < d
+      out.flat[tok * d + c] = out.flat[tok * d + c] + d_out.flat[i * d + c]
+      c = c + 1
+    end
+    i = i + 1
+  end
+  out
+end
+cmp("embed_lookup", embed_lookup_native(tab, idx_arr), TinyNNCuda.embed_lookup(tab, idx_arr), 1.0e-4)
+d_emb = Mat.new(4, 3)
+i = 0
+while i < 12
+  d_emb.flat[i] = (i + 1).to_f * 0.5
+  i = i + 1
+end
+cmp("embed_back", embed_back_native(d_emb, idx_arr, 5), TinyNNCuda.embed_back(d_emb, idx_arr, 5), 1.0e-4)
+
+# --- sgd_step: (4, 3) ---
+sp = Mat.new(4, 3)
+sg = Mat.new(4, 3)
+i = 0
+while i < 12
+  sp.flat[i] = i.to_f * 0.5 - 2.0
+  sg.flat[i] = (i.to_f - 6.0) * 0.1
+  i = i + 1
+end
+def sgd_native(param, grad, lr)
+  out = Mat.new(param.nrows, param.ncols)
+  n = param.nrows * param.ncols
+  i = 0
+  while i < n
+    out.flat[i] = param.flat[i] - lr * grad.flat[i]
+    i = i + 1
+  end
+  out
+end
+cmp("sgd_step", sgd_native(sp, sg, 0.05), TinyNNCuda.sgd_step(sp, sg, 0.05), 1.0e-4)
+
 # --- ffn_pipeline: (3,4)*(4,6)*(6,4) ---
 h_p  = Mat.new(3, 4)
 w1_p = Mat.new(4, 6)
