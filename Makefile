@@ -107,7 +107,8 @@ ab-smoke-pipeline: tinynn/ab_smoke_pipeline
 # the scheduler's buffer allocation; we fold transposes into consuming
 # ops instead (see TinyNN.matmul's b-transposed upload).
 test: smoke ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm \
-       ab-smoke-softmax ab-smoke-scale ab-smoke-pipeline
+       ab-smoke-softmax ab-smoke-scale ab-smoke-pipeline \
+       ab-smoke-matmul-variants ab-smoke-back ab-smoke-embed ab-smoke-sgd
 
 tinynn/ab_smoke: tinynn/ab_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke.rb -o tinynn/ab_smoke
