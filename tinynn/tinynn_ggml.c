@@ -210,6 +210,53 @@ void *tnn_scale(void *sess, void *a, double scale)
     return (void *)ggml_scale(s->ctx, (struct ggml_tensor *)a, (float)scale);
 }
 
+void *tnn_rms_norm_back(void *sess, void *x, void *dy, double eps)
+{
+    if (!sess || !x || !dy) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_rms_norm_back(s->ctx,
+                                       (struct ggml_tensor *)x,
+                                       (struct ggml_tensor *)dy,
+                                       (float)eps);
+}
+
+void *tnn_softmax_back(void *sess, void *a, void *dy)
+{
+    if (!sess || !a || !dy) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    /* Plain softmax backward: scale=1.0, max_bias=0.0 (no ALiBi). */
+    return (void *)ggml_soft_max_ext_back(s->ctx,
+                                           (struct ggml_tensor *)a,
+                                           (struct ggml_tensor *)dy,
+                                           1.0f, 0.0f);
+}
+
+void *tnn_get_rows(void *sess, void *table, void *idx)
+{
+    if (!sess || !table || !idx) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_get_rows(s->ctx,
+                                  (struct ggml_tensor *)table,
+                                  (struct ggml_tensor *)idx);
+}
+
+void *tnn_get_rows_back(void *sess, void *d_out, void *idx, void *table_shape)
+{
+    if (!sess || !d_out || !idx || !table_shape) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_get_rows_back(s->ctx,
+                                       (struct ggml_tensor *)d_out,
+                                       (struct ggml_tensor *)idx,
+                                       (struct ggml_tensor *)table_shape);
+}
+
+void *tnn_input_1d_i32(void *sess, int n)
+{
+    if (!sess || n <= 0) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_new_tensor_1d(s->ctx, GGML_TYPE_I32, (int64_t)n);
+}
+
 int tnn_realize(void *sess, void *result)
 {
     if (!sess || !result) return -1;

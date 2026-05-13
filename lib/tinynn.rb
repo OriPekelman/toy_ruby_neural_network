@@ -38,6 +38,8 @@ module TinyNN
   ffi_func :tnn_softmax,          [:ptr, :ptr],             :ptr
   ffi_func :tnn_transpose,        [:ptr, :ptr],             :ptr
   ffi_func :tnn_scale,            [:ptr, :ptr, :double],    :ptr
+  ffi_func :tnn_rms_norm_back,    [:ptr, :ptr, :ptr, :double], :ptr
+  ffi_func :tnn_softmax_back,     [:ptr, :ptr, :ptr],       :ptr
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int
   ffi_func :tnn_compute,          [:ptr],                   :int
   ffi_func :tnn_scratch_set,      [:ptr, :int, :double],    :void
@@ -313,6 +315,57 @@ module TinyNN
       i = i + 1
     end
     TinyNN.tnn_upload(sess, target)
+  end
+
+  # d/dx of plain RMSNorm(x) given dy (= grad of normalized output).
+  # No gamma — caller is responsible for the gamma part of the chain rule.
+  #
+  # Note on arg order: ggml's header says "a - x, b - dy" but the CPU
+  # source (ggml-cpu/ops.cpp ggml_compute_forward_rms_norm_back_f32)
+  # treats src0 as gradients and src1 as the forward input. We pass
+  # (dy, x) to match the source.
+  def self.rms_norm_back(x, dy, eps)
+    sess = TinyNN.tnn_session_new(0)
+    tdy = TinyNN.tnn_input_2d_f32(sess, dy.nrows, dy.ncols)
+    tx  = TinyNN.tnn_input_2d_f32(sess, x.nrows, x.ncols)
+    tc  = TinyNN.tnn_rms_norm_back(sess, tdy, tx, eps)
+    TinyNN.tnn_realize(sess, tc)
+    TinyNN.stage_row_major_and_upload(sess, tdy, dy)
+    TinyNN.stage_row_major_and_upload(sess, tx,  x)
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+    out = Mat.new(x.nrows, x.ncols)
+    n = x.nrows * x.ncols
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # d/dx of per-row softmax. `a_softmax` is the softmax output;
+  # `dy` is grad of output. (ggml source: src0=dy, src1=y_softmax.)
+  def self.softmax_back(a_softmax, dy)
+    sess = TinyNN.tnn_session_new(0)
+    tdy = TinyNN.tnn_input_2d_f32(sess, dy.nrows, dy.ncols)
+    ta  = TinyNN.tnn_input_2d_f32(sess, a_softmax.nrows, a_softmax.ncols)
+    tc  = TinyNN.tnn_softmax_back(sess, tdy, ta)
+    TinyNN.tnn_realize(sess, tc)
+    TinyNN.stage_row_major_and_upload(sess, tdy, dy)
+    TinyNN.stage_row_major_and_upload(sess, ta,  a_softmax)
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+    out = Mat.new(a_softmax.nrows, a_softmax.ncols)
+    n = a_softmax.nrows * a_softmax.ncols
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNN.tnn_session_free(sess)
+    out
   end
 
   # FFN-shaped chain: result = gelu(h * w1) * w2.

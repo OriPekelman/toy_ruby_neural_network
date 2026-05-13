@@ -40,6 +40,16 @@ void  *tnn_softmax(void *sess, void *a);                /* per-row softmax along
 void  *tnn_transpose(void *sess, void *a);              /* materialised transpose: (rows,cols) → (cols,rows) */
 void  *tnn_scale(void *sess, void *a, double s);        /* element-wise a * s */
 
+/* Backward ops. */
+void  *tnn_rms_norm_back(void *sess, void *x, void *dy, double eps);
+                                                         /* d/dx of plain RMSNorm(x) (no gamma); caller handles gamma chain. */
+void  *tnn_softmax_back(void *sess, void *a, void *dy); /* d/dx of per-row softmax. a is softmax output. */
+void  *tnn_get_rows(void *sess, void *table, void *idx);
+                                                         /* gather rows: out[i] = table[idx[i]] */
+void  *tnn_get_rows_back(void *sess, void *d_out, void *idx, void *table_shape);
+                                                         /* scatter-add: out has table's shape, out[idx[i]] += d_out[i] */
+void  *tnn_input_1d_i32(void *sess, int n);             /* int32 vector input (for row indices). */
+
 /* Realize the graph (allocates all tensors on the backend). Must be
  * called once after all ops are declared and before any upload. */
 int    tnn_realize(void *sess, void *result);
