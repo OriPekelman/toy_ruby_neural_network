@@ -14,6 +14,7 @@ tinynn/*.o
 tinynn/*.a
 tinynn/smoke
 tinynn/ab_smoke
+tinynn/ab_smoke_cuda
 
 # Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
 vendor/

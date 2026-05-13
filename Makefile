@@ -76,17 +76,33 @@ smoke: tinynn/smoke
 tinynn/smoke: tinynn/smoke.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/smoke.rb -o tinynn/smoke
 
-# A/B parity test: native Mat#matmul vs TinyNN.matmul (FFI).
+# A/B parity test: native Mat#matmul vs TinyNN.matmul (FFI, CPU).
 ab-smoke: tinynn/ab_smoke
 	./tinynn/ab_smoke
 
 tinynn/ab_smoke: tinynn/ab_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke.rb -o tinynn/ab_smoke
 
+# A/B parity test against CUDA backend on the local GPU (sm_121 / GB10).
+# Requires `make setup-ggml-cuda` to have produced vendor/ggml/build-cuda.
+ab-smoke-cuda: tinynn/ab_smoke_cuda
+	./tinynn/ab_smoke_cuda
+
+tinynn/tinynn_ggml_cuda.o: tinynn/tinynn_ggml.c tinynn/tinynn_ggml.h
+	$(CC) $(CFLAGS) -DTINYNN_HAVE_CUDA=1 $(GGML_INC) -I$(CUDA_DIR)/include -c $< -o $@
+
+tinynn/libtinynn_ggml_cuda.a: tinynn/tinynn_ggml_cuda.o
+	ar $(ARFLAGS) $@ $<
+
+tinynn/ab_smoke_cuda: tinynn/ab_smoke_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+	$(SPINEL) tinynn/ab_smoke_cuda.rb -o tinynn/ab_smoke_cuda
+
 # --- maintenance ------------------------------------------------------------
 clean:
 	rm -f train_minimal train_tinystories \
-	      tinynn/tinynn_ggml.o tinynn/libtinynn_ggml.a tinynn/smoke tinynn/ab_smoke
+	      tinynn/tinynn_ggml.o tinynn/libtinynn_ggml.a \
+	      tinynn/tinynn_ggml_cuda.o tinynn/libtinynn_ggml_cuda.a \
+	      tinynn/smoke tinynn/ab_smoke tinynn/ab_smoke_cuda
 
 distclean: clean
 	rm -rf $(GGML_DIR)/build $(GGML_DIR)/build-cuda
