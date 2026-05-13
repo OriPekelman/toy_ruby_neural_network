@@ -296,6 +296,26 @@ double tnn_scratch_get(void *sess, int idx)
     return (double)s->scratch[idx];
 }
 
+/* The scratch buffer is just bytes; we let i32 values share it. Caller
+ * must not mix i32 + f32 writes within a single tensor's upload window. */
+void tnn_scratch_set_i32(void *sess, int idx, int value)
+{
+    if (!sess) return;
+    tnn_session *s = (tnn_session *)sess;
+    int max_n = TNN_SCRATCH_BYTES / (int)sizeof(int32_t);
+    if (idx < 0 || idx >= max_n) return;
+    ((int32_t *)s->scratch)[idx] = (int32_t)value;
+}
+
+int tnn_scratch_get_i32(void *sess, int idx)
+{
+    if (!sess) return 0;
+    tnn_session *s = (tnn_session *)sess;
+    int max_n = TNN_SCRATCH_BYTES / (int)sizeof(int32_t);
+    if (idx < 0 || idx >= max_n) return 0;
+    return (int)((int32_t *)s->scratch)[idx];
+}
+
 int tnn_upload(void *sess, void *tensor)
 {
     if (!sess || !tensor) return -1;

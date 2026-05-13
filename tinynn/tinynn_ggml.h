@@ -67,6 +67,8 @@ int    tnn_compute(void *sess);
  */
 void   tnn_scratch_set(void *sess, int idx, double v);
 double tnn_scratch_get(void *sess, int idx);
+void   tnn_scratch_set_i32(void *sess, int idx, int value);
+int    tnn_scratch_get_i32(void *sess, int idx);
 int    tnn_upload(void *sess, void *tensor);
 int    tnn_download(void *sess, void *tensor);
 

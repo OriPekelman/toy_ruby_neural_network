@@ -40,6 +40,11 @@ module TinyNN
   ffi_func :tnn_scale,            [:ptr, :ptr, :double],    :ptr
   ffi_func :tnn_rms_norm_back,    [:ptr, :ptr, :ptr, :double], :ptr
   ffi_func :tnn_softmax_back,     [:ptr, :ptr, :ptr],       :ptr
+  ffi_func :tnn_get_rows,         [:ptr, :ptr, :ptr],       :ptr
+  ffi_func :tnn_get_rows_back,    [:ptr, :ptr, :ptr, :ptr], :ptr
+  ffi_func :tnn_input_1d_i32,     [:ptr, :int],             :ptr
+  ffi_func :tnn_scratch_set_i32,  [:ptr, :int, :int],       :void
+  ffi_func :tnn_scratch_get_i32,  [:ptr, :int],             :int
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int
   ffi_func :tnn_compute,          [:ptr],                   :int
   ffi_func :tnn_scratch_set,      [:ptr, :int, :double],    :void
@@ -336,6 +341,76 @@ module TinyNN
     TinyNN.tnn_download(sess, tc)
     out = Mat.new(x.nrows, x.ncols)
     n = x.nrows * x.ncols
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # Embedding lookup: gather table rows by indices.
+  # `table` is (vocab, d_model) Mat; `indices` is Array<Int>.
+  # Returns (indices.length, d_model) Mat with table[indices[i]] in row i.
+  def self.embed_lookup(table, indices)
+    n_idx = indices.length
+    sess  = TinyNN.tnn_session_new(0)
+    ttab  = TinyNN.tnn_input_2d_f32(sess, table.nrows, table.ncols)
+    tidx  = TinyNN.tnn_input_1d_i32(sess, n_idx)
+    tout  = TinyNN.tnn_get_rows(sess, ttab, tidx)
+    TinyNN.tnn_realize(sess, tout)
+
+    TinyNN.stage_row_major_and_upload(sess, ttab, table)
+
+    i = 0
+    while i < n_idx
+      TinyNN.tnn_scratch_set_i32(sess, i, indices[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, tidx)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tout)
+
+    out = Mat.new(n_idx, table.ncols)
+    n = n_idx * table.ncols
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # Embedding backward: scatter-add d_out rows into a vocab-sized table.
+  # `d_out` is (n_idx, d_model). `indices` is Array<Int>. Returns
+  # (vocab_size, d_model) Mat where out[indices[i]] += d_out[i].
+  def self.embed_back(d_out, indices, vocab_size)
+    n_idx = indices.length
+    sess  = TinyNN.tnn_session_new(0)
+    td    = TinyNN.tnn_input_2d_f32(sess, d_out.nrows, d_out.ncols)
+    tidx  = TinyNN.tnn_input_1d_i32(sess, n_idx)
+    # Shape reference for the result: a freshly-allocated (vocab, d) tensor.
+    tshape = TinyNN.tnn_input_2d_f32(sess, vocab_size, d_out.ncols)
+    tout  = TinyNN.tnn_get_rows_back(sess, td, tidx, tshape)
+    TinyNN.tnn_realize(sess, tout)
+
+    TinyNN.stage_row_major_and_upload(sess, td, d_out)
+
+    i = 0
+    while i < n_idx
+      TinyNN.tnn_scratch_set_i32(sess, i, indices[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, tidx)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tout)
+
+    out = Mat.new(vocab_size, d_out.ncols)
+    n = vocab_size * d_out.ncols
     i = 0
     while i < n
       out.flat[i] = TinyNN.tnn_scratch_get(sess, i)

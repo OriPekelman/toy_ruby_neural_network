@@ -152,6 +152,12 @@ ab-smoke-back: tinynn/ab_smoke_back
 tinynn/ab_smoke_back: tinynn/ab_smoke_back.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_back.rb -o tinynn/ab_smoke_back
 
+ab-smoke-embed: tinynn/ab_smoke_embed
+	./tinynn/ab_smoke_embed
+
+tinynn/ab_smoke_embed: tinynn/ab_smoke_embed.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_embed.rb -o tinynn/ab_smoke_embed
+
 # A/B parity test against CUDA backend on the local GPU (sm_121 / GB10).
 # Requires `make setup-ggml-cuda` to have produced vendor/ggml/build-cuda.
 ab-smoke-cuda: tinynn/ab_smoke_cuda
@@ -189,7 +195,7 @@ clean:
 	      tinynn/ab_smoke_add tinynn/ab_smoke_gelu tinynn/ab_smoke_rms_norm \
 	      tinynn/ab_smoke_softmax tinynn/ab_smoke_transpose tinynn/ab_smoke_scale \
 	      tinynn/ab_smoke_pipeline tinynn/ab_smoke_big tinynn/ab_smoke_big_cuda \
-	      tinynn/ab_smoke_matmul_variants tinynn/ab_smoke_back
+	      tinynn/ab_smoke_matmul_variants tinynn/ab_smoke_back tinynn/ab_smoke_embed
 
 distclean: clean
 	rm -rf $(GGML_DIR)/build $(GGML_DIR)/build-cuda
