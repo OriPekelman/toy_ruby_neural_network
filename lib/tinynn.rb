@@ -350,6 +350,19 @@ module TinyNN
     out
   end
 
+  # SGD parameter update: param_new = param - lr * grad.
+  # Returns a fresh Mat with the updated parameter (caller is
+  # responsible for swapping it back into wherever param came from —
+  # we don't have persistent-session storage yet).
+  #
+  # Composed from TinyNN.add and TinyNN.scale rather than ggml_opt_step_sgd
+  # (which would need an sgd_params tensor with (alpha, weight_decay)).
+  # Faster path is a single fused op; this version is the cleanest one
+  # with the primitives we already have.
+  def self.sgd_step(param, grad, lr)
+    TinyNN.add(param, TinyNN.scale(grad, -lr))
+  end
+
   # Embedding lookup: gather table rows by indices.
   # `table` is (vocab, d_model) Mat; `indices` is Array<Int>.
   # Returns (indices.length, d_model) Mat with table[indices[i]] in row i.
