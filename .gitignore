@@ -23,6 +23,7 @@ tinynn/ab_smoke_scale
 tinynn/ab_smoke_pipeline
 tinynn/ab_smoke_big
 tinynn/ab_smoke_big_cuda
+tinynn/ab_smoke_matmul_variants
 tinynn/ab_smoke_cuda
 tinynn/ab_smoke_all_cuda
 

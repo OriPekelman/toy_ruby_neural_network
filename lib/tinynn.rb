@@ -329,6 +329,73 @@ module TinyNN
     TinyNN.matmul(hidden, w2)
   end
 
+  # a * b^T natively (matches Mat#matmul_t). Faster than .matmul(b) for the
+  # same shapes because there's no Ruby-side transpose of b on upload.
+  def self.matmul_t(a, b)
+    sess = TinyNN.tnn_session_new(0)
+    ta = TinyNN.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tb = TinyNN.tnn_input_2d_f32(sess, b.nrows, b.ncols)
+    tc = TinyNN.tnn_matmul(sess, ta, tb)
+    TinyNN.tnn_realize(sess, tc)
+
+    TinyNN.stage_row_major_and_upload(sess, ta, a)
+    TinyNN.stage_row_major_and_upload(sess, tb, b)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    out = Mat.new(a.nrows, b.nrows)
+    m = a.nrows
+    n = b.nrows
+    i = 0
+    while i < m
+      j = 0
+      while j < n
+        out.flat[i * n + j] = TinyNN.tnn_scratch_get(sess, j * m + i)
+        j = j + 1
+      end
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # a^T * b (matches Mat#t_matmul). Both inputs uploaded transposed so
+  # ggml's ne0 lines up with the summed-over K dimension.
+  def self.t_matmul(a, b)
+    sess = TinyNN.tnn_session_new(0)
+    # Both tensors created as their transposed shape:
+    #   ta_t: ne0=a.nrows (=K), ne1=a.ncols (=M)
+    #   tb_t: ne0=b.nrows (=K), ne1=b.ncols (=N)
+    ta_t = TinyNN.tnn_input_2d_f32(sess, a.ncols, a.nrows)
+    tb_t = TinyNN.tnn_input_2d_f32(sess, b.ncols, b.nrows)
+    tc = TinyNN.tnn_matmul(sess, ta_t, tb_t)
+    TinyNN.tnn_realize(sess, tc)
+
+    TinyNN.stage_transposed_and_upload(sess, ta_t, a)
+    TinyNN.stage_transposed_and_upload(sess, tb_t, b)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    out = Mat.new(a.ncols, b.ncols)
+    m = a.ncols
+    n = b.ncols
+    i = 0
+    while i < m
+      j = 0
+      while j < n
+        out.flat[i * n + j] = TinyNN.tnn_scratch_get(sess, j * m + i)
+        j = j + 1
+      end
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
   # Element-wise a * s for scalar s. Returns a new Mat (out-of-place).
   def self.scale(a, s)
     sess = TinyNN.tnn_session_new(0)
