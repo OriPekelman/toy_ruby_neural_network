@@ -13,6 +13,7 @@ data/ts_*.txt
 tinynn/*.o
 tinynn/*.a
 tinynn/smoke
+tinynn/ab_smoke
 
 # Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
 vendor/

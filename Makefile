@@ -28,10 +28,10 @@ CUDA_DIR    ?= /usr/local/cuda
 # --- pure-Spinel drivers ----------------------------------------------------
 all: train_minimal train_tinystories
 
-train_minimal: train_minimal.rb lib/transformer.rb lib/training.rb
+train_minimal: train_minimal.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
-train_tinystories: train_tinystories.rb lib/transformer.rb lib/training.rb
+train_tinystories: train_tinystories.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 # --- ggml vendor ------------------------------------------------------------
@@ -76,10 +76,17 @@ smoke: tinynn/smoke
 tinynn/smoke: tinynn/smoke.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/smoke.rb -o tinynn/smoke
 
+# A/B parity test: native Mat#matmul vs TinyNN.matmul (FFI).
+ab-smoke: tinynn/ab_smoke
+	./tinynn/ab_smoke
+
+tinynn/ab_smoke: tinynn/ab_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke.rb -o tinynn/ab_smoke
+
 # --- maintenance ------------------------------------------------------------
 clean:
 	rm -f train_minimal train_tinystories \
-	      tinynn/tinynn_ggml.o tinynn/libtinynn_ggml.a tinynn/smoke
+	      tinynn/tinynn_ggml.o tinynn/libtinynn_ggml.a tinynn/smoke tinynn/ab_smoke
 
 distclean: clean
 	rm -rf $(GGML_DIR)/build $(GGML_DIR)/build-cuda
