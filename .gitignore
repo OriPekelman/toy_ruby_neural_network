@@ -27,6 +27,7 @@ tinynn/ab_smoke_matmul_variants
 tinynn/ab_smoke_back
 tinynn/ab_smoke_embed
 tinynn/ab_smoke_sgd
+tinynn/ab_smoke_gelu_back
 tinynn/forward_smoke
 tinynn/persistent_bench
 tinynn/persistent_bench_cuda

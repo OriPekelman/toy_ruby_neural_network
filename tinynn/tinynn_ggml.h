@@ -50,6 +50,16 @@ void  *tnn_get_rows_back(void *sess, void *d_out, void *idx, void *table_shape);
                                                          /* scatter-add: out has table's shape, out[idx[i]] += d_out[i] */
 void  *tnn_input_1d_i32(void *sess, int n);             /* int32 vector input (for row indices). */
 
+/* Custom non-ggml kernel: dx = dh * d/dx GeLU(x) (tanh approximation).
+ * Reads x from scratch[0..n) and dh from scratch[n..2n); writes
+ * dx into scratch[2n..3n). Caller is responsible for staging and
+ * reading back. CPU-only (no GPU path yet).
+ *
+ * No new tensor created; this is a side-channel op that skips the
+ * ggml graph entirely. Useful because ggml has no gelu_back op.
+ */
+void   tnn_gelu_back_scratch(void *sess, int n);
+
 /* Realize the graph (allocates all tensors on the backend). Must be
  * called once after all ops are declared and before any upload. */
 int    tnn_realize(void *sess, void *result);

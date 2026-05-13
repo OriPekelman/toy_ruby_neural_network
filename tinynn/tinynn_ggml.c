@@ -6,6 +6,7 @@
 #include "ggml-cuda.h"
 #endif
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -255,6 +256,32 @@ void *tnn_input_1d_i32(void *sess, int n)
     if (!sess || n <= 0) return NULL;
     tnn_session *s = (tnn_session *)sess;
     return (void *)ggml_new_tensor_1d(s->ctx, GGML_TYPE_I32, (int64_t)n);
+}
+
+void tnn_gelu_back_scratch(void *sess, int n)
+{
+    if (!sess || n <= 0) return;
+    tnn_session *s = (tnn_session *)sess;
+    int max_slots = TNN_SCRATCH_BYTES / (int)sizeof(float);
+    if (3 * n > max_slots) return;     /* not enough scratch */
+
+    const float *x  = s->scratch + 0;
+    const float *dh = s->scratch + n;
+    float       *dx = s->scratch + 2 * n;
+
+    const float c = 0.7978845608028654f;    /* sqrt(2/pi) */
+    const float k = 0.044715f;
+
+    for (int i = 0; i < n; ++i) {
+        float xi  = x[i];
+        float xi2 = xi * xi;
+        float u   = c * (xi + k * xi * xi2);
+        float tu  = tanhf(u);
+        float sech2 = 1.0f - tu * tu;
+        float dudx  = c * (1.0f + 3.0f * k * xi2);
+        float dgelu = 0.5f * (1.0f + tu) + 0.5f * xi * sech2 * dudx;
+        dx[i] = dh[i] * dgelu;
+    }
 }
 
 int tnn_realize(void *sess, void *result)

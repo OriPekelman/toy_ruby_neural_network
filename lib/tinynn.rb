@@ -43,6 +43,7 @@ module TinyNN
   ffi_func :tnn_get_rows,         [:ptr, :ptr, :ptr],       :ptr
   ffi_func :tnn_get_rows_back,    [:ptr, :ptr, :ptr, :ptr], :ptr
   ffi_func :tnn_input_1d_i32,     [:ptr, :int],             :ptr
+  ffi_func :tnn_gelu_back_scratch,[:ptr, :int],             :void
   ffi_func :tnn_scratch_set_i32,  [:ptr, :int, :int],       :void
   ffi_func :tnn_scratch_get_i32,  [:ptr, :int],             :int
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int
@@ -480,6 +481,34 @@ module TinyNN
     i = 0
     while i < n
       out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # GeLU backward: dx = dh * d/dx GeLU(x) (tanh approx).
+  # Skips ggml entirely — uses tnn_gelu_back_scratch which operates
+  # on the session's scratch buffer directly. CPU-only.
+  def self.gelu_back(x, dh)
+    sess = TinyNN.tnn_session_new(0)
+    n = x.nrows * x.ncols
+    # Stage x at [0..n), dh at [n..2n)
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, x.flat[i])
+      i = i + 1
+    end
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, n + i, dh.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_gelu_back_scratch(sess, n)
+    out = Mat.new(x.nrows, x.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, 2 * n + i)
       i = i + 1
     end
     TinyNN.tnn_session_free(sess)
