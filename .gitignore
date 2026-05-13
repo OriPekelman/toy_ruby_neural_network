@@ -36,3 +36,6 @@ tinynn/ab_smoke_all_cuda
 
 # Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
 vendor/
+
+# But DO track tinynn/README.md (the FFI bridge doc)
+!tinynn/README.md
