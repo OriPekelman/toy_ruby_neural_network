@@ -440,4 +440,70 @@ module TinyNNCuda
   def self.sgd_step(param, grad, lr)
     TinyNNCuda.add(param, TinyNNCuda.scale(grad, -lr))
   end
+
+  # ----- Persistent-session API (mirrors TinyNN's; see lib/tinynn.rb) -----
+  def self.persistent_new(prefer_cuda);  TinyNNCuda.tnn_session_new(prefer_cuda); end
+  def self.persistent_free(sess);        TinyNNCuda.tnn_session_free(sess); end
+  def self.alloc_2d(sess, r, c);         TinyNNCuda.tnn_input_2d_f32(sess, r, c); end
+  def self.alloc_1d_i32(sess, n);        TinyNNCuda.tnn_input_1d_i32(sess, n); end
+  def self.build_matmul(sess, ta, tb);   TinyNNCuda.tnn_matmul(sess, ta, tb); end
+  def self.build_add(sess, ta, tb);      TinyNNCuda.tnn_add(sess, ta, tb); end
+  def self.build_gelu(sess, ta);         TinyNNCuda.tnn_gelu(sess, ta); end
+  def self.build_softmax(sess, ta);      TinyNNCuda.tnn_softmax(sess, ta); end
+  def self.build_scale(sess, ta, s);     TinyNNCuda.tnn_scale(sess, ta, s); end
+  def self.build_rms_norm(sess, x, g, e); TinyNNCuda.tnn_rms_norm(sess, x, g, e); end
+  def self.realize(sess, r);             TinyNNCuda.tnn_realize(sess, r); end
+  def self.compute(sess);                TinyNNCuda.tnn_compute(sess); end
+
+  def self.upload_row_major(sess, tensor, mat)
+    n = mat.nrows * mat.ncols
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, i, mat.flat[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_upload(sess, tensor)
+  end
+
+  def self.upload_transposed(sess, tensor, mat)
+    br = mat.nrows
+    bc = mat.ncols
+    i = 0
+    while i < br
+      j = 0
+      while j < bc
+        TinyNNCuda.tnn_scratch_set(sess, j * br + i, mat.flat[i * bc + j])
+        j = j + 1
+      end
+      i = i + 1
+    end
+    TinyNNCuda.tnn_upload(sess, tensor)
+  end
+
+  def self.download_row_major(sess, tensor, rows, cols)
+    TinyNNCuda.tnn_download(sess, tensor)
+    out = Mat.new(rows, cols)
+    n = rows * cols
+    i = 0
+    while i < n
+      out.flat[i] = TinyNNCuda.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    out
+  end
+
+  def self.download_matmul(sess, tensor, m, n)
+    TinyNNCuda.tnn_download(sess, tensor)
+    out = Mat.new(m, n)
+    i = 0
+    while i < m
+      j = 0
+      while j < n
+        out.flat[i * n + j] = TinyNNCuda.tnn_scratch_get(sess, j * m + i)
+        j = j + 1
+      end
+      i = i + 1
+    end
+    out
+  end
 end

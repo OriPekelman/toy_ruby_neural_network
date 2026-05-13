@@ -295,6 +295,142 @@ module TinyNN
     out
   end
 
+  # ----------------------------------------------------------------------
+  # Persistent-session API: build a graph once, run it many times.
+  #
+  # Workflow:
+  #   sess = TinyNN.persistent_new(0)
+  #   ta   = TinyNN.alloc_2d(sess, rows, cols)
+  #   tb   = TinyNN.alloc_2d(sess, rows, cols)
+  #   tc   = TinyNN.build_matmul(sess, ta, tb)   # or build_add / build_gelu / ...
+  #   TinyNN.realize(sess, tc)                    # allocates all backend buffers
+  #   # Upload weights once:
+  #   TinyNN.upload_row_major(sess, tb, w_mat)
+  #   # Per training step:
+  #   loop do
+  #     TinyNN.upload_row_major(sess, ta, input_mat)
+  #     TinyNN.compute(sess)
+  #     result = TinyNN.download_matmul(sess, tc, m, n)    # transposed readback
+  #   end
+  #   TinyNN.persistent_free(sess)
+  #
+  # The win over the one-shot wrappers (TinyNN.matmul etc.) is that
+  # ggml_init / ggml_backend_sched_alloc_graph runs once instead of per
+  # op, and backend buffers (the cuda-side storage for tensors) are
+  # allocated once instead of per call. At the toy LM's transformer
+  # shapes (see ab_smoke_big), this should flip CUDA from losing to
+  # native at small shapes.
+
+  def self.persistent_new(prefer_cuda)
+    TinyNN.tnn_session_new(prefer_cuda)
+  end
+
+  def self.persistent_free(sess)
+    TinyNN.tnn_session_free(sess)
+  end
+
+  def self.alloc_2d(sess, rows, cols)
+    TinyNN.tnn_input_2d_f32(sess, rows, cols)
+  end
+
+  def self.alloc_1d_i32(sess, n)
+    TinyNN.tnn_input_1d_i32(sess, n)
+  end
+
+  def self.build_matmul(sess, ta, tb)
+    TinyNN.tnn_matmul(sess, ta, tb)
+  end
+
+  def self.build_add(sess, ta, tb)
+    TinyNN.tnn_add(sess, ta, tb)
+  end
+
+  def self.build_gelu(sess, ta)
+    TinyNN.tnn_gelu(sess, ta)
+  end
+
+  def self.build_softmax(sess, ta)
+    TinyNN.tnn_softmax(sess, ta)
+  end
+
+  def self.build_scale(sess, ta, s)
+    TinyNN.tnn_scale(sess, ta, s)
+  end
+
+  def self.build_rms_norm(sess, tx, tgamma, eps)
+    TinyNN.tnn_rms_norm(sess, tx, tgamma, eps)
+  end
+
+  def self.realize(sess, result)
+    TinyNN.tnn_realize(sess, result)
+  end
+
+  def self.compute(sess)
+    TinyNN.tnn_compute(sess)
+  end
+
+  # Stage a Mat row-major into scratch and upload to `tensor`. Use for
+  # elementwise inputs or for matmul's A operand. For matmul's B we
+  # also have upload_transposed below.
+  def self.upload_row_major(sess, tensor, mat)
+    n = mat.nrows * mat.ncols
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, mat.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, tensor)
+  end
+
+  # Stage a Mat TRANSPOSED into scratch and upload. Use this for the
+  # `b` operand of build_matmul to get logical A*B semantics (ggml's
+  # mul_mat is A*B^T natively).
+  def self.upload_transposed(sess, tensor, mat)
+    br = mat.nrows
+    bc = mat.ncols
+    i = 0
+    while i < br
+      j = 0
+      while j < bc
+        TinyNN.tnn_scratch_set(sess, j * br + i, mat.flat[i * bc + j])
+        j = j + 1
+      end
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, tensor)
+  end
+
+  # Download a tensor whose data is row-major (output of elementwise
+  # ops like add, gelu, rms_norm, softmax, scale).
+  def self.download_row_major(sess, tensor, rows, cols)
+    TinyNN.tnn_download(sess, tensor)
+    out = Mat.new(rows, cols)
+    n = rows * cols
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+    out
+  end
+
+  # Download a matmul result. ggml's mul_mat result has ne0=m, ne1=n;
+  # reading row-major (rows=m, cols=n) means scratch[j*m + i].
+  def self.download_matmul(sess, tensor, m, n)
+    TinyNN.tnn_download(sess, tensor)
+    out = Mat.new(m, n)
+    i = 0
+    while i < m
+      j = 0
+      while j < n
+        out.flat[i * n + j] = TinyNN.tnn_scratch_get(sess, j * m + i)
+        j = j + 1
+      end
+      i = i + 1
+    end
+    out
+  end
+
   # Internal: stage b TRANSPOSED into scratch, then bulk-upload to `target`.
   def self.stage_transposed_and_upload(sess, target, b)
     br = b.nrows

@@ -173,6 +173,18 @@ forward-smoke: tinynn/forward_smoke
 tinynn/forward_smoke: tinynn/forward_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/forward_smoke.rb -o tinynn/forward_smoke
 
+persistent-bench: tinynn/persistent_bench
+	./tinynn/persistent_bench
+
+tinynn/persistent_bench: tinynn/persistent_bench.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/persistent_bench.rb -o tinynn/persistent_bench
+
+persistent-bench-cuda: tinynn/persistent_bench_cuda
+	./tinynn/persistent_bench_cuda
+
+tinynn/persistent_bench_cuda: tinynn/persistent_bench_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+	$(SPINEL) tinynn/persistent_bench_cuda.rb -o tinynn/persistent_bench_cuda
+
 # A/B parity test against CUDA backend on the local GPU (sm_121 / GB10).
 # Requires `make setup-ggml-cuda` to have produced vendor/ggml/build-cuda.
 ab-smoke-cuda: tinynn/ab_smoke_cuda
@@ -211,7 +223,8 @@ clean:
 	      tinynn/ab_smoke_softmax tinynn/ab_smoke_transpose tinynn/ab_smoke_scale \
 	      tinynn/ab_smoke_pipeline tinynn/ab_smoke_big tinynn/ab_smoke_big_cuda \
 	      tinynn/ab_smoke_matmul_variants tinynn/ab_smoke_back tinynn/ab_smoke_embed \
-	      tinynn/ab_smoke_sgd tinynn/forward_smoke
+	      tinynn/ab_smoke_sgd tinynn/forward_smoke tinynn/persistent_bench \
+	      tinynn/persistent_bench_cuda
 
 distclean: clean
 	rm -rf $(GGML_DIR)/build $(GGML_DIR)/build-cuda
