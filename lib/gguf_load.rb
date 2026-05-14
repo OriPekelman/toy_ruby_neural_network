@@ -1,0 +1,179 @@
+# Populate a GPT2LM's weights from a project-converted GGUF file (see
+# prep/convert_distilgpt2_to_gguf.py for the producer side).
+#
+# Caller constructs the GPT2LM with the right hyperparams (we don't read
+# them out of the GGUF metadata yet — tnn_gguf_kv_get_* is a TODO; for
+# distilgpt2 they're known: vocab=50257, d=768, ff=3072, heads=12, ...).
+#
+# Reads go straight into the destination Mat.flat / Array<Float> via
+# the existing tnn_gguf_read_f32_to_doubles FFI — no intermediate
+# buffers, no copies after the FFI write. token_embd alone is 38.6 M
+# elements (~300 MB f64); a copy step would be wasteful.
+
+require_relative "transformer"
+require_relative "gpt2"
+require_relative "tinynn"
+
+module GGUFLoad
+  # Linear-scan tensor lookup. 100 tensors × ~50 reads = 5000 string
+  # compares — fine. A hash map would force Spinel into a polymorphic
+  # value type; not worth it.
+  def self.find_index(handle, name, n_tensors)
+    i = 0
+    while i < n_tensors
+      if TinyNN.tnn_gguf_tensor_name(handle, i) == name
+        return i
+      end
+      i = i + 1
+    end
+    -1
+  end
+
+  # Read a 1-D tensor straight into an existing Array<Float>.
+  def self.read_array(handle, name, target, n_tensors)
+    idx = find_index(handle, name, n_tensors)
+    if idx < 0
+      puts "missing: " + name
+      return
+    end
+    nel = target.length
+    rc = TinyNN.tnn_gguf_read_f32_to_doubles(handle, idx, target, nel)
+    if rc != 0
+      puts "read failed: " + name + " rc=" + rc.to_s
+    end
+  end
+
+  # Read a 2-D tensor straight into an existing Mat (writes to mat.flat).
+  def self.read_mat(handle, name, mat, n_tensors)
+    idx = find_index(handle, name, n_tensors)
+    if idx < 0
+      puts "missing: " + name
+      return
+    end
+    nel = mat.nrows * mat.ncols
+    rc = TinyNN.tnn_gguf_read_f32_to_doubles(handle, idx, mat.flat, nel)
+    if rc != 0
+      puts "read failed: " + name + " rc=" + rc.to_s
+    end
+  end
+
+  # Read a [d_model, d_model] concatenated-heads weight tensor into
+  # an Array<Mat> of n_heads × (d_model, d_head). Column block
+  # [h*d_head : (h+1)*d_head] of the source becomes head h's matrix.
+  def self.read_split_heads_weight(handle, name, dst, n_heads, d_model, d_head, n_tensors)
+    idx = find_index(handle, name, n_tensors)
+    if idx < 0
+      puts "missing: " + name
+      return
+    end
+    nel = d_model * d_model
+    # Stage via a temporary flat buffer (~2.4 MB for distilgpt2);
+    # the strided per-head copy can't run while ggml writes to dst.
+    tmp = Array.new(nel, 0.0)
+    rc  = TinyNN.tnn_gguf_read_f32_to_doubles(handle, idx, tmp, nel)
+    if rc != 0
+      puts "read failed: " + name + " rc=" + rc.to_s
+      return
+    end
+    h = 0
+    while h < n_heads
+      mat = dst[h]
+      i = 0
+      while i < d_model
+        j = 0
+        while j < d_head
+          mat.flat[i * d_head + j] = tmp[i * d_model + h * d_head + j]
+          j = j + 1
+        end
+        i = i + 1
+      end
+      h = h + 1
+    end
+  end
+
+  # Read a [d_model] concatenated-heads bias into n_heads × Array<Float>(d_head).
+  def self.read_split_heads_bias(handle, name, dst, n_heads, d_head, n_tensors)
+    idx = find_index(handle, name, n_tensors)
+    if idx < 0
+      puts "missing: " + name
+      return
+    end
+    d_model = n_heads * d_head
+    tmp = Array.new(d_model, 0.0)
+    rc  = TinyNN.tnn_gguf_read_f32_to_doubles(handle, idx, tmp, d_model)
+    if rc != 0
+      puts "read failed: " + name + " rc=" + rc.to_s
+      return
+    end
+    h = 0
+    while h < n_heads
+      arr = dst[h]
+      j = 0
+      while j < d_head
+        arr[j] = tmp[h * d_head + j]
+        j = j + 1
+      end
+      h = h + 1
+    end
+  end
+
+  # Load distilgpt2-shaped GGUF (also fits gpt2-small/medium/large) into
+  # a caller-constructed GPT2LM. Returns true on success.
+  def self.load_gpt2(model, path)
+    handle = TinyNN.tnn_gguf_load(path)
+    if handle == nil
+      puts "open failed: " + path
+      return false
+    end
+    n_tensors = TinyNN.tnn_gguf_n_tensors(handle)
+    puts "loading " + path + " (" + n_tensors.to_s + " tensors)"
+
+    d_model = model.d_model
+    d_head  = model.d_head
+    n_heads = model.n_heads
+
+    # Globals
+    read_mat(handle,   "token_embd.weight",    model.token_embed, n_tensors)
+    read_mat(handle,   "position_embd.weight", model.pos_embed,   n_tensors)
+    read_array(handle, "output_norm.weight",   model.ln_f_gamma,  n_tensors)
+    read_array(handle, "output_norm.bias",     model.ln_f_beta,   n_tensors)
+
+    # Per-block
+    li = 0
+    while li < model.n_layers
+      blk    = model.gpt2_blocks[li]
+      prefix = "blk." + li.to_s
+
+      read_array(handle, prefix + ".attn_norm.weight", blk.ln1_gamma, n_tensors)
+      read_array(handle, prefix + ".attn_norm.bias",   blk.ln1_beta,  n_tensors)
+      read_array(handle, prefix + ".ffn_norm.weight",  blk.ln2_gamma, n_tensors)
+      read_array(handle, prefix + ".ffn_norm.bias",    blk.ln2_beta,  n_tensors)
+
+      read_split_heads_weight(handle, prefix + ".attn_q.weight",
+                               blk.w_q, n_heads, d_model, d_head, n_tensors)
+      read_split_heads_weight(handle, prefix + ".attn_k.weight",
+                               blk.w_k, n_heads, d_model, d_head, n_tensors)
+      read_split_heads_weight(handle, prefix + ".attn_v.weight",
+                               blk.w_v, n_heads, d_model, d_head, n_tensors)
+      read_split_heads_bias(handle, prefix + ".attn_q.bias",
+                             blk.b_q, n_heads, d_head, n_tensors)
+      read_split_heads_bias(handle, prefix + ".attn_k.bias",
+                             blk.b_k, n_heads, d_head, n_tensors)
+      read_split_heads_bias(handle, prefix + ".attn_v.bias",
+                             blk.b_v, n_heads, d_head, n_tensors)
+
+      read_mat(handle,   prefix + ".attn_output.weight", blk.w_o, n_tensors)
+      read_array(handle, prefix + ".attn_output.bias",   blk.b_o, n_tensors)
+
+      read_mat(handle,   prefix + ".ffn_up.weight",   blk.w_ff1, n_tensors)
+      read_array(handle, prefix + ".ffn_up.bias",     blk.b_ff1, n_tensors)
+      read_mat(handle,   prefix + ".ffn_down.weight", blk.w_ff2, n_tensors)
+      read_array(handle, prefix + ".ffn_down.bias",   blk.b_ff2, n_tensors)
+
+      li = li + 1
+    end
+
+    TinyNN.tnn_gguf_free(handle)
+    true
+  end
+end

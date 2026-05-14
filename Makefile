@@ -313,6 +313,14 @@ gpt2-build-smoke: tinynn/gpt2_build_smoke
 tinynn/gpt2_build_smoke: tinynn/gpt2_build_smoke.rb lib/transformer.rb lib/gpt2.rb
 	$(SPINEL) tinynn/gpt2_build_smoke.rb -o tinynn/gpt2_build_smoke
 
+# Load distilgpt2-f32.gguf into a GPT2LM and print sentinel weights
+# per category. Verifies name mapping + per-head split before forward.
+gpt2-load-smoke: tinynn/gpt2_load_smoke
+	./tinynn/gpt2_load_smoke
+
+tinynn/gpt2_load_smoke: tinynn/gpt2_load_smoke.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/gpt2_load_smoke.rb -o tinynn/gpt2_load_smoke
+
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed
 
