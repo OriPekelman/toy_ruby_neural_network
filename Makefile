@@ -336,6 +336,14 @@ gpt2-parity: tinynn/gpt2_parity
 tinynn/gpt2_parity: tinynn/gpt2_parity.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/gpt2_parity.rb -o tinynn/gpt2_parity
 
+# FFI parity probe: persistent ggml graph with LayerNorm + biases.
+# Dumps last-row logits to data/ours_ffi_logits.txt.
+gpt2-ffi-parity: tinynn/gpt2_ffi_parity
+	./tinynn/gpt2_ffi_parity
+
+tinynn/gpt2_ffi_parity: tinynn/gpt2_ffi_parity.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/gpt2_ffi_parity.rb -o tinynn/gpt2_ffi_parity
+
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed
 

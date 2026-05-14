@@ -80,14 +80,19 @@ def cmd_ref():
 
 
 def cmd_compare():
+    # Optional --ours <path> override so the same compare works for
+    # native (data/ours_logits.txt) and FFI (data/ours_ffi_logits.txt).
+    ours_path = OURS_PATH
+    if len(sys.argv) >= 4 and sys.argv[2] == "--ours":
+        ours_path = Path(sys.argv[3])
     if not REF_PATH.exists():
         print(f"missing {REF_PATH} — run: prep/parity.py ref", file=sys.stderr)
         sys.exit(2)
-    if not OURS_PATH.exists():
-        print(f"missing {OURS_PATH} — run: make gpt2-parity", file=sys.stderr)
+    if not ours_path.exists():
+        print(f"missing {ours_path}", file=sys.stderr)
         sys.exit(2)
     ref  = read_logits(REF_PATH)
-    ours = read_logits(OURS_PATH)
+    ours = read_logits(ours_path)
     if ref.shape != ours.shape:
         print(f"shape mismatch: ref={ref.shape}  ours={ours.shape}", file=sys.stderr)
         sys.exit(3)

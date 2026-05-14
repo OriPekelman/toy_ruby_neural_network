@@ -721,14 +721,23 @@ int tnn_upload_from_float_array(void *sess, void *tensor, const double *data, si
     if (!sess || !tensor || !data) return -1;
     tnn_session *s = (tnn_session *)sess;
     struct ggml_tensor *t = (struct ggml_tensor *)tensor;
-    size_t max_n = TNN_SCRATCH_BYTES / sizeof(float);
-    if (n > max_n) return -2;
+    const size_t chunk_floats = TNN_SCRATCH_BYTES / sizeof(float);
 
-    /* f64 → f32 conversion into scratch. The data pointer aliases the
-     * caller's Array<Float> storage; we don't write through it, only read. */
-    for (size_t i = 0; i < n; ++i) s->scratch[i] = (float)data[i];
-
-    ggml_backend_tensor_set(t, s->scratch, 0, n * sizeof(float));
+    /* Chunked f64 → f32 conversion into scratch, then ggml_backend_tensor_set
+     * per chunk at the right byte offset. Lets us upload tensors larger
+     * than scratch (e.g. distilgpt2's 38.6 M-element token_embd) without
+     * growing the scratch buffer for everyone. */
+    size_t off = 0;
+    while (off < n) {
+        size_t this_chunk = (n - off) < chunk_floats ? (n - off) : chunk_floats;
+        for (size_t i = 0; i < this_chunk; ++i) {
+            s->scratch[i] = (float)data[off + i];
+        }
+        ggml_backend_tensor_set(t, s->scratch,
+                                  off * sizeof(float),
+                                  this_chunk * sizeof(float));
+        off += this_chunk;
+    }
     return 0;
 }
 

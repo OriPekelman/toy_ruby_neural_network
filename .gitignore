@@ -72,3 +72,5 @@ tinynn/gpt2_load_smoke
 tinynn/gpt2_parity
 data/ours_logits.txt
 data/ref_logits.txt
+tinynn/gpt2_ffi_parity
+data/ours_ffi_logits.txt
