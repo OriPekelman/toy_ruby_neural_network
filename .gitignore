@@ -66,3 +66,6 @@ data/*.gguf
 prep/_hf_cache/
 data/prompt_ids.txt
 distilgpt2_demo
+tinynn/gguf_inspect
+tinynn/gpt2_build_smoke
+tinynn/gpt2_load_smoke
