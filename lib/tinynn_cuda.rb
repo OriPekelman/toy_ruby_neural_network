@@ -11,6 +11,18 @@
 # Build: `make ab-smoke-cuda` (requires `make setup-ggml-cuda` to have
 # produced vendor/ggml/build-cuda first).
 
+# Same AdamStepResult definition as lib/tinynn.rb — drivers require
+# exactly one of {tinynn, tinynn_cuda} so we duplicate to keep each
+# file self-sufficient.
+class AdamStepResult
+  attr_accessor :param, :mom_m, :mom_v
+  def initialize(param, mom_m, mom_v)
+    @param = param
+    @mom_m = mom_m
+    @mom_v = mom_v
+  end
+end
+
 module TinyNNCuda
   ffi_lib "tinynn_ggml_cuda"
   ffi_lib "ggml"
