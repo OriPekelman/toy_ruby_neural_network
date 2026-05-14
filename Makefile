@@ -177,6 +177,14 @@ ab-smoke-dual-graph: tinynn/ab_smoke_dual_graph
 tinynn/ab_smoke_dual_graph: tinynn/ab_smoke_dual_graph.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_dual_graph.rb -o tinynn/ab_smoke_dual_graph
 
+# M2 foundation: view_2d + cpy to write a single row into a persistent
+# (max_T, d_head) KV buffer at a runtime-baked position.
+ab-smoke-kv-write: tinynn/ab_smoke_kv_write
+	./tinynn/ab_smoke_kv_write
+
+tinynn/ab_smoke_kv_write: tinynn/ab_smoke_kv_write.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_kv_write.rb -o tinynn/ab_smoke_kv_write
+
 # M1.2: full single-block forward through the persistent graph.
 # Parity vs native TransformerLM.forward() at n_layers=1, n_heads=2.
 ab-smoke-full-forward-block: tinynn/ab_smoke_full_forward_block

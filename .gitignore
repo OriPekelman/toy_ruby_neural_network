@@ -56,3 +56,4 @@ tinynn/full_forward_bench
 tinynn/full_forward_bench_cuda
 inference_demo
 inference_demo_cuda
+tinynn/ab_smoke_kv_write
