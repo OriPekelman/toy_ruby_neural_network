@@ -16,7 +16,6 @@ module TinyNN
   ffi_lib "ggml-base"
   ffi_lib "stdc++"
   ffi_lib "pthread"
-  ffi_lib "gomp"
   ffi_lib "m"
 
   # Library search paths injected by Makefile via SPINEL_FFI_CFLAGS.

@@ -337,7 +337,6 @@ module TinyNN
   ffi_lib "ggml-base"
   ffi_lib "stdc++"
   ffi_lib "pthread"
-  ffi_lib "gomp"
   # spinel wrapper adds -lm *before* FFI libs; ggml-cpu needs it again.
   ffi_lib "m"
 

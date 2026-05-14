@@ -19,6 +19,19 @@ CC          ?= cc
 CFLAGS      ?= -O2 -fPIC -Wall -Wextra
 ARFLAGS      = rcs
 
+# macOS Command Line Tools (as of 26.x) keep stale 2023 C++ stub headers
+# at /Library/Developer/CommandLineTools/usr/include/c++/v1 which shadow
+# the real headers in the SDK. Prepend the SDK's libc++ include path so
+# ggml's C++ files can find <mutex>, <array>, etc. No-op on Linux.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  CMAKE_ENV := CPLUS_INCLUDE_PATH=$(shell xcrun --show-sdk-path)/usr/include/c++/v1
+  NJOBS     := $(shell sysctl -n hw.logicalcpu)
+else
+  CMAKE_ENV :=
+  NJOBS     := $(shell nproc)
+endif
+
 # --- vendored ggml ----------------------------------------------------------
 GGML_DIR    := vendor/ggml
 GGML_REPO   := https://github.com/ggml-org/ggml.git
@@ -58,24 +71,28 @@ $(GGML_DIR)/CMakeLists.txt:
 	mkdir -p vendor
 	git clone --depth 1 $(GGML_REPO) $(GGML_DIR)
 
+# GGML_OPENMP=OFF: avoid the libgomp link dependency. On macOS clang
+# ships libomp (LLVM), not libgomp (GNU); ggml's own thread pool covers
+# CPU parallelism either way. Same setting used on Linux for build
+# parity (and so lib/tinynn.rb doesn't need ffi_lib "gomp").
 setup-ggml: $(GGML_DIR)/CMakeLists.txt
-	cd $(GGML_DIR) && cmake -B build \
+	cd $(GGML_DIR) && $(CMAKE_ENV) cmake -B build \
 	  -DBUILD_SHARED_LIBS=OFF -DGGML_STATIC=ON \
 	  -DGGML_CUDA=OFF -DGGML_METAL=OFF -DGGML_VULKAN=OFF \
-	  -DGGML_OPENCL=OFF -DGGML_BLAS=OFF \
+	  -DGGML_OPENCL=OFF -DGGML_BLAS=OFF -DGGML_OPENMP=OFF -DGGML_ACCELERATE=OFF \
 	  -DGGML_BUILD_EXAMPLES=OFF -DGGML_BUILD_TESTS=OFF \
 	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-	cd $(GGML_DIR) && cmake --build build -j$(shell nproc)
+	cd $(GGML_DIR) && $(CMAKE_ENV) cmake --build build -j$(NJOBS)
 
 setup-ggml-cuda: $(GGML_DIR)/CMakeLists.txt
-	cd $(GGML_DIR) && PATH=$(CUDA_DIR)/bin:$$PATH cmake -B build-cuda \
+	cd $(GGML_DIR) && PATH=$(CUDA_DIR)/bin:$$PATH $(CMAKE_ENV) cmake -B build-cuda \
 	  -DBUILD_SHARED_LIBS=OFF -DGGML_STATIC=ON \
 	  -DGGML_CUDA=ON -DGGML_METAL=OFF -DGGML_VULKAN=OFF \
-	  -DGGML_OPENCL=OFF -DGGML_BLAS=OFF \
+	  -DGGML_OPENCL=OFF -DGGML_BLAS=OFF -DGGML_OPENMP=OFF -DGGML_ACCELERATE=OFF \
 	  -DGGML_BUILD_EXAMPLES=OFF -DGGML_BUILD_TESTS=OFF \
 	  -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
 	  -DCMAKE_CUDA_ARCHITECTURES=$(GGML_CUDA_ARCH) -DGGML_NATIVE=OFF
-	cd $(GGML_DIR) && PATH=$(CUDA_DIR)/bin:$$PATH cmake --build build-cuda -j$(shell nproc)
+	cd $(GGML_DIR) && PATH=$(CUDA_DIR)/bin:$$PATH $(CMAKE_ENV) cmake --build build-cuda -j$(NJOBS)
 
 # --- tinynn shim (CPU build) ------------------------------------------------
 GGML_INC := -I$(GGML_DIR)/include -I$(GGML_DIR)/src
