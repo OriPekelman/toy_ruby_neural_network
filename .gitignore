@@ -1,5 +1,6 @@
 # Spinel-compiled binaries
 train_minimal
+train_minimal_ffi
 train_tinystories
 
 # Generated C from `spinel -c` at the repo root only — the tinynn/ shim
@@ -30,6 +31,7 @@ tinynn/ab_smoke_sgd
 tinynn/ab_smoke_gelu_back
 tinynn/ab_smoke_cegrad
 tinynn/ab_smoke_adam
+tinynn/gguf_smoke
 tinynn/forward_smoke
 tinynn/persistent_bench
 tinynn/persistent_bench_cuda

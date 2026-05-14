@@ -63,6 +63,19 @@ module TinyNN
   ffi_func :tnn_input_1d_i32,     [:ptr, :int],             :ptr
   ffi_func :tnn_gelu_back_scratch,[:ptr, :int],             :void
   ffi_func :tnn_adam_step_scratch,[:ptr, :int, :double, :double, :double, :double, :double, :double], :void
+
+  # GGUF model-file loader (S5). Path-based; pass nil-friendly via tnn_gguf_load_empty
+  # when you just want to validate the binding works.
+  ffi_func :tnn_gguf_load,                  [:str],           :ptr
+  ffi_func :tnn_gguf_load_empty,            [],               :ptr
+  ffi_func :tnn_gguf_free,                  [:ptr],           :void
+  ffi_func :tnn_gguf_n_tensors,             [:ptr],           :int
+  ffi_func :tnn_gguf_tensor_name,           [:ptr, :int],     :str
+  ffi_func :tnn_gguf_tensor_ne,             [:ptr, :int, :int], :int
+  ffi_func :tnn_gguf_tensor_type,           [:ptr, :int],     :int
+  ffi_func :tnn_gguf_tensor_nbytes,         [:ptr, :int],     :size_t
+  ffi_func :tnn_gguf_read_f32_to_doubles,   [:ptr, :int, :float_array, :size_t], :int
+  ffi_func :tnn_gguf_write_demo_file,       [:str],           :int
   ffi_func :tnn_scratch_set_i32,  [:ptr, :int, :int],       :void
   ffi_func :tnn_scratch_get_i32,  [:ptr, :int],             :int
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int

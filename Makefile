@@ -31,6 +31,7 @@ all: train_minimal train_tinystories
 train_minimal: train_minimal.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
+
 train_tinystories: train_tinystories.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
@@ -64,8 +65,11 @@ GGML_INC := -I$(GGML_DIR)/include -I$(GGML_DIR)/src
 tinynn/tinynn_ggml.o: tinynn/tinynn_ggml.c tinynn/tinynn_ggml.h
 	$(CC) $(CFLAGS) $(GGML_INC) -c $< -o $@
 
-tinynn/libtinynn_ggml.a: tinynn/tinynn_ggml.o
-	ar $(ARFLAGS) $@ $<
+tinynn/tinynn_gguf.o: tinynn/tinynn_gguf.c tinynn/tinynn_gguf.h
+	$(CC) $(CFLAGS) $(GGML_INC) -c $< -o $@
+
+tinynn/libtinynn_ggml.a: tinynn/tinynn_ggml.o tinynn/tinynn_gguf.o
+	ar $(ARFLAGS) $@ tinynn/tinynn_ggml.o tinynn/tinynn_gguf.o
 
 # --- smoke test -------------------------------------------------------------
 # Builds tinynn/smoke.rb against the CPU shim. Requires `setup-ggml` to have
@@ -171,6 +175,12 @@ ab-smoke-adam: tinynn/ab_smoke_adam
 
 tinynn/ab_smoke_adam: tinynn/ab_smoke_adam.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_adam.rb -o tinynn/ab_smoke_adam
+
+gguf-smoke: tinynn/gguf_smoke
+	./tinynn/gguf_smoke
+
+tinynn/gguf_smoke: tinynn/gguf_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/gguf_smoke.rb -o tinynn/gguf_smoke
 
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed
