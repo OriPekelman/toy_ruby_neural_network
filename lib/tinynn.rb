@@ -16,18 +16,36 @@
 
 # Persistent FFI cache for one transformer block's FFN. Holds two
 # realized ggml graphs (one per matmul) so the per-call cost drops
-# to upload + compute + download.
+# from "create + realize + upload + compute + download + free" to
+# just "upload + compute + download".
 #
-# Weights need to be uploaded each call because training mutates them
-# every SGD step. The win is amortising the ggml_init +
-# backend_sched_alloc_graph cost which would otherwise re-run per
-# matmul per layer per step.
+# Lazy-realized: T (sequence length) isn't known until the first
+# forward call. realize_for(t_seq, d_model, d_ff) sets up the graphs;
+# subsequent calls with the same T reuse them.
+#
+# Weights re-upload each call (training mutates them); the win is
+# amortising ggml_init + backend_sched_alloc_graph across many steps.
 class FFNFFICache
   attr_accessor :sess1, :t_h, :t_w1_t, :tc1,
                 :sess2, :t_hidden, :t_w2_t, :tc2,
-                :t_seq, :d_model, :d_ff
+                :t_seq, :d_model, :d_ff, :realized
 
-  def initialize(t_seq, d_model, d_ff)
+  def initialize
+    @realized = false
+    @t_seq    = 0
+    @d_model  = 0
+    @d_ff     = 0
+    @sess1    = nil
+    @t_h      = nil
+    @t_w1_t   = nil
+    @tc1      = nil
+    @sess2    = nil
+    @t_hidden = nil
+    @t_w2_t   = nil
+    @tc2      = nil
+  end
+
+  def realize_for(t_seq, d_model, d_ff)
     @t_seq   = t_seq
     @d_model = d_model
     @d_ff    = d_ff
@@ -43,6 +61,8 @@ class FFNFFICache
     @t_w2_t   = TinyNN.tnn_input_2d_f32(@sess2, d_model, d_ff)
     @tc2      = TinyNN.tnn_matmul(@sess2, @t_hidden, @t_w2_t)
     TinyNN.tnn_realize(@sess2, @tc2)
+
+    @realized = true
   end
 end
 

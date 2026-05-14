@@ -21,7 +21,12 @@
 # true.  Off by default to keep the toy zero-dep; flip on to use the
 # bridge and accelerate at real-LLM scale (see tinynn/README.md).
 USE_FFI_MATMUL = false
-require_relative "tinynn" if USE_FFI_MATMUL
+# tinynn is always required so FFNFFICache is defined (it lives in
+# lib/tinynn.rb). The require itself doesn't run any FFI code; only
+# feed_forward_ffi's USE_FFI_MATMUL-gated branch does. With
+# USE_FFI_MATMUL=false the FFI methods are dead code that Spinel's
+# DCE drops, but the library libs still get linked.
+require_relative "tinynn"
 
 # ============================================================================
 #   Mat: 2D float matrix, flat-storage. Indexed as flat[i * ncols + j].
@@ -460,7 +465,20 @@ class TransformerLM
       @layer_caches.push(LayerCache.new)
       li += 1
     end
+
+    # Per-block persistent FFI caches for feed_forward. Lazily realized
+    # on first call so we don't need to decide T (sequence length) at
+    # model-construction time. With USE_FFI_MATMUL=false they sit
+    # unused; the cost is one cheap object alloc per block.
+    @ffn_ffi_caches = [FFNFFICache.new]
+    li = 1
+    while li < n_layers
+      @ffn_ffi_caches.push(FFNFFICache.new)
+      li += 1
+    end
   end
+
+  attr_accessor :ffn_ffi_caches
 
   attr_accessor :layer_caches
 
@@ -628,11 +646,7 @@ class TransformerLM
   # GeLU uses the tanh approximation: 0.5 x (1 + tanh(c (x + 0.044715 x³))),
   # c = √(2/π).
   def feed_forward(h, block)
-    if USE_FFI_MATMUL
-      pre = TinyNN.matmul(h, block.w_ff1)
-    else
-      pre = h.matmul(block.w_ff1)
-    end
+    pre = h.matmul(block.w_ff1)
     hidden = Mat.new(pre.nrows, pre.ncols)
     c = 0.7978845608028654   # sqrt(2/pi)
     n = pre.nrows * pre.ncols
@@ -643,11 +657,46 @@ class TransformerLM
       hidden.flat[i] = 0.5 * x * (1.0 + Math.tanh(u))
       i += 1
     end
-    if USE_FFI_MATMUL
-      out = TinyNN.matmul(hidden, block.w_ff2)
-    else
-      out = hidden.matmul(block.w_ff2)
+    out = hidden.matmul(block.w_ff2)
+    FFResult.new(out, FFCache.new(pre, hidden))
+  end
+
+  # Persistent-session FFI variant of feed_forward. Re-uses the
+  # graphs in `ffi_cache` (lazy-realized on first call); per call
+  # we just upload h + w_ff1 + w_ff2, compute, download.
+  def feed_forward_ffi(h, block, ffi_cache)
+    t_seq = h.nrows
+    d_model = h.ncols
+    d_ff = block.w_ff1.ncols
+
+    if !ffi_cache.realized
+      ffi_cache.realize_for(t_seq, d_model, d_ff)
     end
+
+    # Upload h (row-major) and w_ff1 (transposed) into session 1.
+    TinyNN.upload_row_major(ffi_cache.sess1, ffi_cache.t_h, h)
+    TinyNN.stage_transposed_and_upload(ffi_cache.sess1, ffi_cache.t_w1_t, block.w_ff1)
+    TinyNN.tnn_compute(ffi_cache.sess1)
+    pre = TinyNN.download_matmul(ffi_cache.sess1, ffi_cache.tc1, t_seq, d_ff)
+
+    # GeLU on the host (matches feed_forward's tanh approx).
+    hidden = Mat.new(pre.nrows, pre.ncols)
+    c = 0.7978845608028654
+    n = pre.nrows * pre.ncols
+    i = 0
+    while i < n
+      x = pre.flat[i]
+      u = c * (x + 0.044715 * x * x * x)
+      hidden.flat[i] = 0.5 * x * (1.0 + Math.tanh(u))
+      i += 1
+    end
+
+    # Upload hidden + w_ff2 (transposed) into session 2.
+    TinyNN.upload_row_major(ffi_cache.sess2, ffi_cache.t_hidden, hidden)
+    TinyNN.stage_transposed_and_upload(ffi_cache.sess2, ffi_cache.t_w2_t, block.w_ff2)
+    TinyNN.tnn_compute(ffi_cache.sess2)
+    out = TinyNN.download_matmul(ffi_cache.sess2, ffi_cache.tc2, t_seq, d_model)
+
     FFResult.new(out, FFCache.new(pre, hidden))
   end
 
@@ -664,7 +713,7 @@ class TransformerLM
     x_cur = x
     li = 0
     while li < @n_layers
-      transformer_block_into(x_cur, @blocks[li], @layer_caches[li])
+      transformer_block_into(x_cur, @blocks[li], @layer_caches[li], @ffn_ffi_caches[li])
       x_cur = @layer_caches[li].x_out
       li += 1
     end
@@ -684,7 +733,9 @@ class TransformerLM
   attr_accessor :cache
 
   # Same as transformer_block but writes into a pre-existing LayerCache.
-  def transformer_block_into(x, block, cache)
+  # ffi_cache is the persistent-session FFNFFICache for this block;
+  # used only when USE_FFI_MATMUL is true.
+  def transformer_block_into(x, block, cache, ffi_cache)
     nr1 = rms_norm(x, block.norm1_gamma)
     h1  = nr1.y
     cache.h_norm1 = h1
@@ -700,7 +751,11 @@ class TransformerLM
     cache.h_norm2 = h2
     cache.rms2    = nr2.rms
 
-    ff = feed_forward(h2, block)
+    if USE_FFI_MATMUL
+      ff = feed_forward_ffi(h2, block, ffi_cache)
+    else
+      ff = feed_forward(h2, block)
+    end
     cache.ff_cache = ff.cache
     x_out = x_attn.add(ff.out)
     cache.x_out = x_out
