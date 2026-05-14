@@ -54,6 +54,8 @@ module TinyNNCuda
   ffi_func :tnn_scratch_get_i32,  [:ptr, :int],             :int
   ffi_func :tnn_upload,           [:ptr, :ptr],             :int
   ffi_func :tnn_download,         [:ptr, :ptr],             :int
+  ffi_func :tnn_upload_from_float_array, [:ptr, :ptr, :float_array, :size_t], :int
+  ffi_func :tnn_upload_from_int_array,   [:ptr, :ptr, :int_array,   :size_t], :int
   ffi_func :tnn_tensor_ne0,       [:ptr],                   :int
   ffi_func :tnn_tensor_ne1,       [:ptr],                   :int
 
@@ -456,13 +458,7 @@ module TinyNNCuda
   def self.compute(sess);                TinyNNCuda.tnn_compute(sess); end
 
   def self.upload_row_major(sess, tensor, mat)
-    n = mat.nrows * mat.ncols
-    i = 0
-    while i < n
-      TinyNNCuda.tnn_scratch_set(sess, i, mat.flat[i])
-      i = i + 1
-    end
-    TinyNNCuda.tnn_upload(sess, tensor)
+    TinyNNCuda.tnn_upload_from_float_array(sess, tensor, mat.flat, mat.nrows * mat.ncols)
   end
 
   def self.upload_transposed(sess, tensor, mat)
