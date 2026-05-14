@@ -252,19 +252,29 @@ flip on whenever you want the ~45× LLM-shape speedup.
 
 ## What's not here yet
 
-See the op-coverage table above. Roughly:
+- **CUDA mirrors for the backward-only ops** — `gelu_back`,
+  `cross_entropy_grad`, `adam_step` are CPU-only. The CPU kernels
+  side-channel through the session scratch buffer (no ggml graph),
+  which means porting to CUDA needs either nvcc-compiled kernels or
+  composition from ggml ops with a device-side path. Not blocking
+  S4 because all of these are small per-iter relative to matmul.
+- **`rms_norm_back`** — FFI binding exists but produces wrong values
+  via `ggml_backend_sched_graph_compute` (correct via legacy
+  `ggml_graph_compute_with_ctx`). See
+  [`ggml-org/ggml#1491`](https://github.com/ggml-org/ggml/issues/1491).
+  Until that's resolved, RMSNorm backward stays on the native path.
+- **GGUF dequantize** — current loader handles `GGML_TYPE_F32`. For
+  real-LLM checkpoints in `Q4_K` / `Q8_0` / etc., we'd need to wire
+  ggml's dequant kernels into `tnn_gguf_read_*_to_doubles`. The
+  metadata + f32 paths work end-to-end (see `gguf_smoke.rb`).
 
-- **Custom `gelu_back` kernel** — ggml has no GeLU backward op
-  (only `silu_back`). Needs a hand-rolled CPU/CUDA kernel.
-- **`rms_norm_back` debug** — binding exists, FFI returns values that
-  disagree with ggml's own documented formula in the source. Needs a
-  standalone C reproducer to disambiguate ggml-vs-shim.
-- **`adam_step`** — composable from element-wise ops + scalar
-  divisions, or via `ggml_opt_step_adamw`. Multi-component state.
-- **`cross_entropy_grad`** — fused `softmax(logits) - one_hot(target)`,
-  composable from `TinyNN.softmax` + a one-hot helper + `TinyNN.add`.
-- **GGUF / safetensors loader** — needs a wrapper around
-  `gguf_init_params` (struct-by-value, which Spinel's FFI can't pass).
+## Op coverage update — now complete for the FFN forward+backward path
 
-None of these are blocked on the upstream Spinel issues; all are real
-code that just needs writing.
+| Op | CPU | CUDA | Notes |
+|---|---|---|---|
+| `gelu_back(x, dh)` | ✅ | — | Custom CPU kernel (tanh-approx derivative); no ggml op |
+| `cross_entropy_grad(logits, targets, n_pred)` | ✅ | — | Composed: softmax + scale*2 + add + Ruby one-hot |
+| `adam_step(p, g, m, v, lr, b1, b2, eps, omc1, omc2)` | ✅ | — | Custom CPU kernel (sqrt+div); returns AdamStepResult |
+| GGUF load / write / read-f32 (`tnn_gguf_*`) | ✅ | n/a | f32 only; round-trip verified |
+
+Total verified ops on CPU: 16. CUDA: 13 (forward + simpler backward).
