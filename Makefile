@@ -297,6 +297,14 @@ gguf-smoke: tinynn/gguf_smoke
 tinynn/gguf_smoke: tinynn/gguf_smoke.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/gguf_smoke.rb -o tinynn/gguf_smoke
 
+# Walks every tensor in data/distilgpt2-f32.gguf via tnn_gguf_*. Used to
+# confirm large HF-converted GGUFs roundtrip through the project FFI.
+gguf-inspect: tinynn/gguf_inspect
+	./tinynn/gguf_inspect
+
+tinynn/gguf_inspect: tinynn/gguf_inspect.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/gguf_inspect.rb -o tinynn/gguf_inspect
+
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed
 
