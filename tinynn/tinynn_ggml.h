@@ -80,6 +80,14 @@ void  *tnn_null_ptr(void);                              /* :ptr-typed NULL seed 
 void  *tnn_view_1d(void *sess, void *a, int ne0, long offset);
 void  *tnn_view_2d(void *sess, void *a, int ne0, int ne1, long nb1, long offset);
 void  *tnn_cpy(void *sess, void *a, void *b);
+
+/* set_rows + soft_max_ext: the canonical KV-cache attention primitives.
+ * set_rows writes the new k/v row at a RUNTIME index, so the graph is
+ * static across decode steps. soft_max_ext applies an additive mask
+ * (typically -inf for keys > current pos) before softmax. */
+void  *tnn_set_rows(void *sess, void *a, void *b, void *idx);
+void  *tnn_soft_max_ext(void *sess, void *a, void *mask, double scale, double max_bias);
+void  *tnn_set_2d(void *sess, void *a, void *b, long nb1, long offset);
 void  *tnn_transpose(void *sess, void *a);              /* materialised transpose: (rows,cols) → (cols,rows) */
 void  *tnn_scale(void *sess, void *a, double s);        /* element-wise a * s */
 

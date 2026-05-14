@@ -287,6 +287,56 @@ void *tnn_layer_norm(void *sess, void *x, void *gamma_row, void *beta_row, doubl
                               (struct ggml_tensor *)beta_row);
 }
 
+/* Write `b` into `a` at byte offset, with row stride nb1. Result has
+ * `a`'s shape (unlike ggml_cpy which returns the small dst view) so
+ * downstream ops can read the modified `a` directly. Used for V[:, pos]
+ * column writes in KV cache (V layout = [max_T, d_head], offset =
+ * pos * 4, nb1 = max_T * 4). */
+void *tnn_set_2d(void *sess, void *a, void *b, long nb1, long offset)
+{
+    if (!sess || !a || !b) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_set_2d(s->ctx,
+                                 (struct ggml_tensor *)a,
+                                 (struct ggml_tensor *)b,
+                                 (size_t)nb1,
+                                 (size_t)offset);
+}
+
+/* Write `b`'s rows into `a` at row indices `idx`. For our KV cache:
+ *   a   = persistent K (ne=[d_head, max_T])
+ *   b   = compute k_new (ne=[d_head, 1])
+ *   idx = compute (1,) int32 holding the current decode position
+ * The new k row lands at K[idx[0]] (other rows untouched). Same shape
+ * pattern for V. Position is a RUNTIME tensor — the graph stays
+ * static across decode steps, so we don't need to rebuild it. */
+void *tnn_set_rows(void *sess, void *a, void *b, void *idx)
+{
+    if (!sess || !a || !b || !idx) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_set_rows(s->ctx,
+                                   (struct ggml_tensor *)a,
+                                   (struct ggml_tensor *)b,
+                                   (struct ggml_tensor *)idx);
+}
+
+/* Softmax-with-mask. Adds `mask` to `a`, scales by `scale`, then runs
+ * softmax along ne[0]. For KV-cache attention: scores shape (max_T, 1),
+ * mask shape (max_T, 1), result shape (max_T, 1). The mask is uploaded
+ * per step with 0.0 for positions <= pos and -inf for positions > pos
+ * so the softmax zeroes out future-key attention even though K's
+ * future-position slots may hold stale or uninitialised values. */
+void *tnn_soft_max_ext(void *sess, void *a, void *mask, double scale, double max_bias)
+{
+    if (!sess || !a) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_soft_max_ext(s->ctx,
+                                       (struct ggml_tensor *)a,
+                                       (struct ggml_tensor *)mask,
+                                       (float)scale,
+                                       (float)max_bias);
+}
+
 /* Returns a NULL pointer typed as :ptr. Useful as an Array<:ptr> seed
  * value so Spinel infers the array as a PtrArray rather than typing
  * it from a `[nil]` literal (which can resolve to IntArray). */

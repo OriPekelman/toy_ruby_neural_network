@@ -195,6 +195,15 @@ ab-smoke-kv-write: tinynn/ab_smoke_kv_write
 tinynn/ab_smoke_kv_write: tinynn/ab_smoke_kv_write.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_kv_write.rb -o tinynn/ab_smoke_kv_write
 
+# M2 prototype: single-step decode through a KV cache. Pre-fills K/V
+# for positions 0..POS-1, writes k_new/v_new at POS, computes scores
+# + soft_max_ext + head_out. Parity vs hand-rolled native.
+ab-smoke-kv-attn: tinynn/ab_smoke_kv_attn
+	./tinynn/ab_smoke_kv_attn
+
+tinynn/ab_smoke_kv_attn: tinynn/ab_smoke_kv_attn.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_kv_attn.rb -o tinynn/ab_smoke_kv_attn
+
 # M1.2: full single-block forward through the persistent graph.
 # Parity vs native TransformerLM.forward() at n_layers=1, n_heads=2.
 ab-smoke-full-forward-block: tinynn/ab_smoke_full_forward_block
