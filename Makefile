@@ -169,15 +169,6 @@ ab-smoke-dual-graph: tinynn/ab_smoke_dual_graph
 tinynn/ab_smoke_dual_graph: tinynn/ab_smoke_dual_graph.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_dual_graph.rb -o tinynn/ab_smoke_dual_graph
 
-# M1.1: full-forward skeleton -- embed lookup + pos_embed + tied unembed
-# as a persistent ggml graph. Blocks (attention + FFN) get inserted
-# between these bookends in later milestones.
-ab-smoke-full-forward-skeleton: tinynn/ab_smoke_full_forward_skeleton
-	./tinynn/ab_smoke_full_forward_skeleton
-
-tinynn/ab_smoke_full_forward_skeleton: tinynn/ab_smoke_full_forward_skeleton.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
-	$(SPINEL) tinynn/ab_smoke_full_forward_skeleton.rb -o tinynn/ab_smoke_full_forward_skeleton
-
 # M1.2: full single-block forward through the persistent graph.
 # Parity vs native TransformerLM.forward() at n_layers=1, n_heads=2.
 ab-smoke-full-forward-block: tinynn/ab_smoke_full_forward_block

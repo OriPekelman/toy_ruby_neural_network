@@ -10,10 +10,10 @@ require_relative "../lib/transformer"
 require_relative "../lib/tinynn"
 
 vocab_size = 10
-d_model    = 8
-d_ff       = 16
-n_heads    = 2
-n_layers   = 1
+d_model    = 16
+d_ff       = 32
+n_heads    = 4
+n_layers   = 2
 context_length = 3
 
 model = TransformerLM.new(vocab_size, d_model, d_ff, n_heads, n_layers, context_length)

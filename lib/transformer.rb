@@ -693,6 +693,17 @@ class TransformerLM
     FFResult.new(out, FFCache.new(pre, hidden))
   end
 
+  # NOTE: forward via FullForwardFFICache is available as a free
+  # function on a separate cache object — see tinynn/full_forward_bench
+  # for the usage pattern. We avoid making it a TransformerLM instance
+  # method because Spinel's iterative type inference, when forced to
+  # process the cache's `t_seq`/`d_model`/`d_ff` ivars together with
+  # FFNFFICache's same-named ivars and TransformerLM's own d_model,
+  # collapses Mat.@nrows/@ncols to a polymorphic (mrb_float / sp_RbVal)
+  # type and pollutes Mat throughout the program (sp_TinyNN_cls_scale
+  # then fails to compile its `(int)mat->iv_nrows` cast). The standalone
+  # FullForwardFFICache + caller-side weight upload sidesteps this.
+
   # Full forward pass. Writes intermediates into @layer_caches and @cache,
   # which are pre-allocated so their types are unambiguous to Spinel.
   # Returns the logits Mat (T × vocab_size).
