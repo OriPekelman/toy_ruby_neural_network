@@ -325,6 +325,31 @@ void tnn_set_output(void *tensor)
     ggml_set_output((struct ggml_tensor *)tensor);
 }
 
+void tnn_set_param(void *tensor)
+{
+    if (!tensor) return;
+    ggml_set_param((struct ggml_tensor *)tensor);
+}
+
+void *tnn_input_1d_f32(void *sess, int n)
+{
+    if (!sess || n <= 0) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_new_tensor_1d(s->ctx, GGML_TYPE_F32, (int64_t)n);
+}
+
+void *tnn_opt_step_adamw(void *sess, void *a, void *grad, void *m, void *v, void *params)
+{
+    if (!sess || !a || !grad || !m || !v || !params) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_opt_step_adamw(s->ctx,
+                                        (struct ggml_tensor *)a,
+                                        (struct ggml_tensor *)grad,
+                                        (struct ggml_tensor *)m,
+                                        (struct ggml_tensor *)v,
+                                        (struct ggml_tensor *)params);
+}
+
 int tnn_realize(void *sess, void *result)
 {
     if (!sess || !result) return -1;

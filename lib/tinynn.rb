@@ -124,6 +124,9 @@ module TinyNN
   ffi_func :tnn_input_1d_i32,     [:ptr, :int],             :ptr
   ffi_func :tnn_gelu_back_scratch,[:ptr, :int],             :void
   ffi_func :tnn_set_output,       [:ptr],                   :void
+  ffi_func :tnn_set_param,        [:ptr],                   :void
+  ffi_func :tnn_input_1d_f32,     [:ptr, :int],             :ptr
+  ffi_func :tnn_opt_step_adamw,   [:ptr, :ptr, :ptr, :ptr, :ptr, :ptr], :ptr
   ffi_func :tnn_adam_step_scratch,[:ptr, :int, :double, :double, :double, :double, :double, :double], :void
 
   # GGUF model-file loader (S5). Path-based; pass nil-friendly via tnn_gguf_load_empty

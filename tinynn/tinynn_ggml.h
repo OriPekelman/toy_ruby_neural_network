@@ -83,6 +83,24 @@ int    tnn_realize(void *sess, void *result);
  * its input tensor's allocation). Call BEFORE tnn_realize. */
 void   tnn_set_output(void *tensor);
 
+/* Mark a tensor as a trainable parameter. Required by
+ * ggml_opt_step_adamw on its weight argument. Call BEFORE tnn_realize. */
+void   tnn_set_param(void *tensor);
+
+/* 1-D F32 input tensor (length n). Used for the 7-element
+ * adamw_params vector (alpha, b1, b2, eps, wd, beta1h, beta2h). */
+void  *tnn_input_1d_f32(void *sess, int n);
+
+/* In-place AdamW step. After compute:
+ *   m = m*b1 + g*(1-b1)
+ *   v = v*b2 + g*g*(1-b2)
+ *   a = a*(1 - alpha*wd) - alpha * (m*beta1h) / (sqrt(v*beta2h) + eps)
+ *
+ * Matches the project's plain-Adam with wd=0 since `keep = 1 - alpha*0 = 1`
+ * and beta1h = 1 / (1 - b1^t), beta2h = 1 / (1 - b2^t) -- so
+ * mh = m * beta1h = m_hat, vh = sqrt(v * beta2h) + eps = sqrt(v_hat) + eps. */
+void  *tnn_opt_step_adamw(void *sess, void *a, void *grad, void *m, void *v, void *params);
+
 /* Compute the (already-built) graph. Must be called after upload. */
 int    tnn_compute(void *sess);
 

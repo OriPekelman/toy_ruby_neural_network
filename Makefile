@@ -146,6 +146,19 @@ ab-smoke-ffncache: tinynn/ab_smoke_ffncache
 tinynn/ab_smoke_ffncache: tinynn/ab_smoke_ffncache.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_ffncache.rb -o tinynn/ab_smoke_ffncache
 
+# ggml-native AdamW step (opt_step_adamw) parity vs project's plain-Adam.
+ab-smoke-adamw-op: tinynn/ab_smoke_adamw_op
+	./tinynn/ab_smoke_adamw_op
+
+tinynn/ab_smoke_adamw_op: tinynn/ab_smoke_adamw_op.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_adamw_op.rb -o tinynn/ab_smoke_adamw_op
+
+ab-smoke-adamw-op-cuda: tinynn/ab_smoke_adamw_op_cuda
+	./tinynn/ab_smoke_adamw_op_cuda
+
+tinynn/ab_smoke_adamw_op_cuda: tinynn/ab_smoke_adamw_op_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+	$(SPINEL) tinynn/ab_smoke_adamw_op_cuda.rb -o tinynn/ab_smoke_adamw_op_cuda
+
 # Transformer-shape sized parity + wallclock comparison.
 ab-smoke-big: tinynn/ab_smoke_big
 	./tinynn/ab_smoke_big
