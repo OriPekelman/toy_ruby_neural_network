@@ -135,14 +135,15 @@ Educational, with optional acceleration for real-LM-scale work.
 - Generations look plausibly TinyStories-shaped:
   *"once upon a time there was a little boy named tim he loved to
   play in the park with his best friends…"*
-- FFI bridge: 16 ops + chained FFN graph + ggml-native AdamW
-  verified on CPU and CUDA. `FFNFFICache` now runs the FFN as a
-  single chained graph (`mul_mat → gelu → mul_mat`) so activations
-  stay on GPU between the matmuls. CPU FFI matches native at toy
-  shape and ~45× faster at LLM shape; CUDA chained converges in
-  604 ms on train_minimal (down from 757 ms with the two-session
-  version). At toy shape CUDA is still I/O-bound; full performance
-  story and remaining steps to fully-on-GPU training are in
+- FFI bridge: 19 ggml ops + chained FFN graph + `FullForwardFFICache`
+  (entire model forward as one persistent graph) + ggml-native AdamW
+  verified on both CPU and CUDA. At "more than toy" shape
+  (vocab=4096, d_model=384, n_heads=6, n_layers=6, T=128) the full
+  forward runs **38× faster on CPU FFI** (1180 ms → 31 ms/iter) and
+  **34× faster on CUDA FFI**. End-to-end inference works:
+  `./inference_demo` generates greedy-sampled tokens via the FFI
+  graph, parity-checked against native forward. Full performance
+  story and the path to fully-on-GPU training in
   [tinynn/README.md](tinynn/README.md).
 
 Real LM training at this scale still wants careful hyperparameter

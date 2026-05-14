@@ -44,6 +44,33 @@ while li < N_LAYERS
   li = li + 1
 end
 
+# === Brief training so generation is non-degenerate ===
+# 20 SGD steps on a few hand-crafted sequences (same idiom as
+# train_minimal). Without training, random weights make every
+# argmax pick the same token; a bit of SGD breaks the symmetry
+# and the FFI/native parity still holds.
+seqs_a = [0, 1, 2, 3, 4]
+seqs_b = [5, 6, 7, 8, 9]
+seqs_c = [10, 11, 12, 13, 14]
+grads = Gradients.new(VOCAB, D_MODEL, D_FF, N_HEADS, D_MODEL / N_HEADS, N_LAYERS, CONTEXT)
+step = 0
+while step < 20
+  grads.fill_zero
+  model.forward(seqs_a)
+  model.backward(seqs_a, grads)
+  model.apply_gradients_sgd(grads, 0.05)
+  grads.fill_zero
+  model.forward(seqs_b)
+  model.backward(seqs_b, grads)
+  model.apply_gradients_sgd(grads, 0.05)
+  grads.fill_zero
+  model.forward(seqs_c)
+  model.backward(seqs_c, grads)
+  model.apply_gradients_sgd(grads, 0.05)
+  step = step + 1
+end
+puts "warm-trained 20 SGD steps on [0..4]/[5..9]/[10..14]"
+
 # === FFI cache setup ===
 cache = FullForwardFFICacheCuda.new
 cache.realize_for(T_SEQ, D_MODEL, D_FF, N_HEADS, N_LAYERS, VOCAB)
