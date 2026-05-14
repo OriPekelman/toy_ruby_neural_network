@@ -43,11 +43,15 @@ inference_demo: inference_demo.rb lib/transformer.rb lib/tinynn.rb tinynn/libtin
 inference_demo_cuda: inference_demo_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
 	$(SPINEL) $< -o $@
 
-# Tep+Spinel HTTP server demo. See tep_demo/README.md. Builds bypass
+# Tep+Spinel HTTP server demos. See tep_demo/README.md. Builds bypass
 # tep's translator (we use spinel directly on a layout-substituted
 # copy of tep's lib in tep_demo/_tep_lib/).
 tep_demo/hello: tep_demo/hello_api.rb tep_demo/_tep_lib/tep.rb
 	$(SPINEL) tep_demo/hello_api.rb -o tep_demo/hello
+
+# Inference API: /generate?n=N runs greedy generation via FullForwardFFICache.
+tep_demo/api: tep_demo/inference_api.rb tep_demo/_tep_lib/tep.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tep_demo/inference_api.rb -o tep_demo/api
 
 # --- ggml vendor ------------------------------------------------------------
 $(GGML_DIR)/CMakeLists.txt:

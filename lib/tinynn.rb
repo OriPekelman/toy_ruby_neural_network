@@ -37,13 +37,18 @@ class FFNFFICache
     @t_seq    = 0
     @d_model  = 0
     @d_ff     = 0
-    @sess     = nil
-    @t_h      = nil
-    @t_w1_t   = nil
-    @t_w2_t   = nil
-    @t_pre    = nil
-    @t_hidden = nil
-    @t_out    = nil
+    # `:ptr` ivars seed with TinyNN.tnn_null_ptr (a typed NULL `void *`)
+    # rather than `nil`. Post-spinel `85a4670`, mixing `nil` with `:ptr`
+    # boxes the ivar as `sp_RbVal`, which then fails the `(void *)` cast
+    # at every FFI call site downstream. The typed-NULL seed keeps the
+    # ivar as plain `void *` end-to-end.
+    @sess     = TinyNN.tnn_null_ptr
+    @t_h      = TinyNN.tnn_null_ptr
+    @t_w1_t   = TinyNN.tnn_null_ptr
+    @t_w2_t   = TinyNN.tnn_null_ptr
+    @t_pre    = TinyNN.tnn_null_ptr
+    @t_hidden = TinyNN.tnn_null_ptr
+    @t_out    = TinyNN.tnn_null_ptr
   end
 
   def realize_for(t_seq, d_model, d_ff)
@@ -84,23 +89,19 @@ class BlockFFICache
                 :t_w_o, :t_w_ff1, :t_w_ff2
 
   def initialize
-    @t_norm1_gamma = nil
-    @t_norm2_gamma = nil
-    # Note: Spinel currently types these arrays as `IntArray` rather
-    # than `PtrArray` because the FFI's `:ptr` value model is integer-
-    # backed (a long-sized address). The runtime is correct because
-    # pointer values fit in `mrb_int` on 64-bit platforms — every
-    # FFI call that takes the element gets a `void *` produced by a
-    # silent long-to-pointer conversion (cc emits a warning but the
-    # bit pattern round-trips). On a 32-bit platform this would break.
-    # Seeded with `tnn_null_ptr` rather than `[nil]` so the intent is
-    # clear in source even though Spinel infers the same way either way.
+    # Post-spinel `85a4670` (Array<:ptr> -> PtrArray): every `:ptr`
+    # ivar seeds with TinyNN.tnn_null_ptr so the inferred type stays
+    # `void *` end-to-end. A bare `nil` seed boxes the ivar as
+    # `sp_RbVal` (nilable) and FFI dispatch then fails the `(void *)`
+    # cast.
+    @t_norm1_gamma = TinyNN.tnn_null_ptr
+    @t_norm2_gamma = TinyNN.tnn_null_ptr
     @t_w_q   = [TinyNN.tnn_null_ptr]
     @t_w_k   = [TinyNN.tnn_null_ptr]
     @t_w_v   = [TinyNN.tnn_null_ptr]
-    @t_w_o   = nil
-    @t_w_ff1 = nil
-    @t_w_ff2 = nil
+    @t_w_o   = TinyNN.tnn_null_ptr
+    @t_w_ff1 = TinyNN.tnn_null_ptr
+    @t_w_ff2 = TinyNN.tnn_null_ptr
   end
 end
 
@@ -143,14 +144,14 @@ class FullForwardFFICache
     @d_head     = 0
     @n_layers   = 0
     @vocab_size = 0
-    @sess               = nil
-    @t_token_embed      = nil
-    @t_pos_slice        = nil
-    @t_token_ids        = nil
-    @t_final_norm_gamma = nil
-    @t_x_embed          = nil
-    @t_x_final          = nil
-    @t_logits           = nil
+    @sess               = TinyNN.tnn_null_ptr
+    @t_token_embed      = TinyNN.tnn_null_ptr
+    @t_pos_slice        = TinyNN.tnn_null_ptr
+    @t_token_ids        = TinyNN.tnn_null_ptr
+    @t_final_norm_gamma = TinyNN.tnn_null_ptr
+    @t_x_embed          = TinyNN.tnn_null_ptr
+    @t_x_final          = TinyNN.tnn_null_ptr
+    @t_logits           = TinyNN.tnn_null_ptr
     @blocks_ffi         = [BlockFFICache.new]
   end
 
@@ -1173,17 +1174,15 @@ end
 
 
 
-# Spinel #490 workaround: anchor the param types of library-style methods
-# that are referenced from TinyNNCuda mirror or otherwise lack a reachable
-# caller in a given compilation unit. Without these dead-code call sites,
-# Spinel defaults `indices` / `mat` params to `mrb_int`, and the body
-# fails to C-compile on `indices.length` / `mat.flat` / etc.
-#
-# The `if false` block is unreachable at runtime; whole-program type
-# inference still picks up the call signatures.
+# Spinel anchor block: ensure `TinyNN.upload_int_array(...)` is seen
+# called from a concrete call site with `[0]` as the third arg, so
+# Spinel pins the `indices` param to `Array<Int>`. Without this,
+# library-style methods with no reachable caller default `indices`
+# to `mrb_int`, and the `:int_array` FFI spec's `indices->data`
+# access then fails C compile.
 if false
-  _a_sess  = TinyNN.tnn_null_ptr
-  _a_tensr = TinyNN.tnn_null_ptr
-  _a_ids   = [0]
-  TinyNN.upload_int_array(_a_sess, _a_tensr, _a_ids)
+  _ai_sess   = TinyNN.tnn_null_ptr
+  _ai_tensor = TinyNN.tnn_null_ptr
+  _ai_ids    = [0]
+  TinyNN.upload_int_array(_ai_sess, _ai_tensor, _ai_ids)
 end

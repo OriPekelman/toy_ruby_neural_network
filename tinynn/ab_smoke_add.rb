@@ -12,7 +12,7 @@ b = Mat.new(2, 3)
 b.flat[0] = -0.5; b.flat[1] = 7.5;  b.flat[2] =  3.0
 b.flat[3] =  0.0; b.flat[4] = 1.0;  b.flat[5] = -50.0
 
-native = a.add(b)
+native = a.plus(b)
 ffi    = TinyNN.add(a, b)
 
 i = 0

@@ -40,13 +40,13 @@ class FFNFFICacheCuda
     @t_seq    = 0
     @d_model  = 0
     @d_ff     = 0
-    @sess     = nil
-    @t_h      = nil
-    @t_w1_t   = nil
-    @t_w2_t   = nil
-    @t_pre    = nil
-    @t_hidden = nil
-    @t_out    = nil
+    @sess     = TinyNNCuda.tnn_null_ptr
+    @t_h      = TinyNNCuda.tnn_null_ptr
+    @t_w1_t   = TinyNNCuda.tnn_null_ptr
+    @t_w2_t   = TinyNNCuda.tnn_null_ptr
+    @t_pre    = TinyNNCuda.tnn_null_ptr
+    @t_hidden = TinyNNCuda.tnn_null_ptr
+    @t_out    = TinyNNCuda.tnn_null_ptr
   end
 
   def realize_for(t_seq, d_model, d_ff)
@@ -690,8 +690,8 @@ class BlockFFICacheCuda
                 :t_w_o, :t_w_ff1, :t_w_ff2
 
   def initialize
-    @t_norm1_gamma = nil
-    @t_norm2_gamma = nil
+    @t_norm1_gamma = TinyNNCuda.tnn_null_ptr
+    @t_norm2_gamma = TinyNNCuda.tnn_null_ptr
     # Note: Spinel currently types these arrays as `IntArray` rather
     # than `PtrArray` because the FFI's `:ptr` value model is integer-
     # backed (a long-sized address). The runtime is correct because
@@ -704,9 +704,9 @@ class BlockFFICacheCuda
     @t_w_q   = [TinyNNCuda.tnn_null_ptr]
     @t_w_k   = [TinyNNCuda.tnn_null_ptr]
     @t_w_v   = [TinyNNCuda.tnn_null_ptr]
-    @t_w_o   = nil
-    @t_w_ff1 = nil
-    @t_w_ff2 = nil
+    @t_w_o   = TinyNNCuda.tnn_null_ptr
+    @t_w_ff1 = TinyNNCuda.tnn_null_ptr
+    @t_w_ff2 = TinyNNCuda.tnn_null_ptr
   end
 end
 
@@ -749,14 +749,14 @@ class FullForwardFFICacheCuda
     @d_head     = 0
     @n_layers   = 0
     @vocab_size = 0
-    @sess               = nil
-    @t_token_embed      = nil
-    @t_pos_slice        = nil
-    @t_token_ids        = nil
-    @t_final_norm_gamma = nil
-    @t_x_embed          = nil
-    @t_x_final          = nil
-    @t_logits           = nil
+    @sess               = TinyNNCuda.tnn_null_ptr
+    @t_token_embed      = TinyNNCuda.tnn_null_ptr
+    @t_pos_slice        = TinyNNCuda.tnn_null_ptr
+    @t_token_ids        = TinyNNCuda.tnn_null_ptr
+    @t_final_norm_gamma = TinyNNCuda.tnn_null_ptr
+    @t_x_embed          = TinyNNCuda.tnn_null_ptr
+    @t_x_final          = TinyNNCuda.tnn_null_ptr
+    @t_logits           = TinyNNCuda.tnn_null_ptr
     @blocks_ffi         = [BlockFFICacheCuda.new]
   end
 

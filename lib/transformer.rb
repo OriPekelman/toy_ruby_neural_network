@@ -151,7 +151,12 @@ class Mat
     out
   end
 
-  def add(other)
+  # Element-wise sum. Renamed from `add` to dodge a Spinel
+  # polymorphic-dispatch with Tep::Router#add (different arity, but
+  # Spinel's arg-type-narrowing in 4024216 doesn't catch the arity
+  # mismatch). add! (mutating, suffix-banged) is unaffected since
+  # method NAME (not signature) is what collides.
+  def plus(other)
     out = Mat.new(@nrows, @ncols)
     n = @nrows * @ncols
     i = 0
@@ -747,7 +752,7 @@ class TransformerLM
 
     sa = self_attention(h1, block)
     cache.attn_cache = sa.cache
-    x_attn = x.add(sa.proj)
+    x_attn = x.plus(sa.proj)
     cache.x_attn = x_attn
 
     nr2 = rms_norm(x_attn, block.norm2_gamma)
@@ -761,7 +766,7 @@ class TransformerLM
       ff = feed_forward(h2, block)
     end
     cache.ff_cache = ff.cache
-    x_out = x_attn.add(ff.out)
+    x_out = x_attn.plus(ff.out)
     cache.x_out = x_out
   end
 
@@ -1023,7 +1028,7 @@ class TransformerLM
     d_x_attn_via_norm = self.rms_norm_backward(layer_cache.x_attn, block.norm2_gamma,
                                                layer_cache.rms2, d_h_norm2,
                                                target_block_grads.norm2_gamma)
-    d_x_attn = dx_out.add(d_x_attn_via_norm)
+    d_x_attn = dx_out.plus(d_x_attn_via_norm)
 
     # Attention sublayer residual: x_attn = x_in + attn_proj.
     d_h_norm1 = self.self_attention_backward(d_x_attn, layer_cache.h_norm1,
@@ -1032,7 +1037,7 @@ class TransformerLM
                                              layer_cache.rms1, d_h_norm1,
                                              target_block_grads.norm1_gamma)
 
-    d_x_attn.add(d_x_in_via_norm)
+    d_x_attn.plus(d_x_in_via_norm)
   end
 
   # ----- Optimization -----
@@ -1276,7 +1281,7 @@ class TransformerLM
 
     sa = self_attention(h1, block)
     cache.attn_cache = sa.cache
-    x_attn = x.add(sa.proj)
+    x_attn = x.plus(sa.proj)
     cache.x_attn = x_attn
 
     nr2 = rms_norm(x_attn, block.norm2_gamma)
@@ -1286,7 +1291,7 @@ class TransformerLM
 
     ff = feed_forward(h2, block)
     cache.ff_cache = ff.cache
-    x_out = x_attn.add(ff.out)
+    x_out = x_attn.plus(ff.out)
     cache.x_out = x_out
 
     BlockResult.new(x_out, cache)

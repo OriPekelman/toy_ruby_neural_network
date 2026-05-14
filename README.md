@@ -143,12 +143,13 @@ Educational, with optional acceleration for real-LM-scale work.
   (1180 ms → 31 ms/iter) and **34× faster on CUDA FFI**. End-to-end
   inference works: `./inference_demo` generates greedy-sampled tokens
   via the FFI graph, parity-checked against native forward.
-- HTTP API POC: `tep_demo/hello_api.rb` + `make tep_demo/hello` builds
-  a single-binary HTTP server (Tep + Spinel) that does **~22k req/s**
-  at 4-thread concurrency. The inference variant
-  (`tep_demo/inference_api.rb`) is currently blocked on a Spinel
-  polymorphic-dispatch issue (Mat#add vs Tep::Router#add collision);
-  see `tep_demo/README.md` for the workarounds.
+- HTTP API POC: `make tep_demo/api && ./tep_demo/api` builds a
+  single-binary Tep+Spinel server that runs greedy generation
+  through `FullForwardFFICache`. **2,738 req/s = ~13.7k tokens/sec**
+  at 16-thread concurrency on this toy model (vocab=16, d_model=32,
+  n_layers=2). 1.46 ms per `/generate?n=5` server-side. See
+  [tep_demo/README.md](tep_demo/README.md) for full numbers and the
+  `make tep_demo/hello` minimal variant.
 - Full performance story and the path to fully-on-GPU training in
   [tinynn/README.md](tinynn/README.md). HTTP-server numbers,
   build details, and the inference-API blocker in

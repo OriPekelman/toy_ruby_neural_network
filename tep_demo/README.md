@@ -44,37 +44,51 @@ Numbers on gx10 (NVIDIA GB10 / aarch64, 1 Spinel worker):
 With keep-alive + tep's prefork (workers > 1) the upstream Tep README
 claims ~167k req/s — we use `Connection: close` here for simplicity.
 
-## What's blocked: inference_api.rb
+## inference_api.rb — full inference over HTTP
 
-`inference_api.rb` — same idea but with `FullForwardFFICache` wired in
-behind a `GET /generate?n=N` endpoint. Currently **doesn't build**:
-Spinel hits a polymorphic-dispatch issue when transformer.rb's
-`Mat#add` and tep's `Tep::Router#add` are both reachable in the same
-compilation unit. The generated C dispatch widens
-`x_attn.add(ff.out)` to a poly receiver `{Mat, Tep::Router}` and emits
-incompatible arms (different arities), producing a `sp_RbVal` that
-fails to assign to the typed `LayerCache.x_out` ivar.
-
-Symptom:
+`inference_api.rb` adds three endpoints on top of the hello plumbing:
 
 ```
-/tmp/spinel_out.xxx/out.c: In function ‘sp_TransformerLM_transformer_block_into’:
-/tmp/spinel_out.xxx/out.c:NNNN: error: incompatible types when assigning to
-  type ‘sp_LayerCache *’ {aka ‘struct sp_LayerCache_s *’} from type ‘sp_RbVal’
+GET /health           ok
+GET /model            {"vocab":16,"d_model":32,"d_ff":64,"n_heads":4,"n_layers":2,"context":16}
+GET /generate?n=N     {"prompt":[3,7,1],"ids":[3,7,1,1,1,...],"ms":1.46}
 ```
 
-(`iv_x_out` is *also* mis-inferred as `sp_LayerCache *` instead of
-`sp_Mat *` — a second pollution downstream of the first.)
+The handler runs greedy generation through `FullForwardFFICache`
+(persistent ggml graph) and reports server-side compute time.
 
-Workarounds (pick one):
+Build + bench:
 
-1. Rename `Mat#add` → `Mat#plus` (or similar) so there's no method-name
-   collision with `Tep::Router#add`. ~9 call sites in
-   `lib/transformer.rb`; mechanical edit.
-2. Bypass Tep's router and roll a tiny HTTP loop directly on top of
-   tep's `sphttp.o` parser. Avoids `Tep::Router` entirely.
-3. Wait for a Spinel-side narrowing of poly `.method()` receivers
-   when call-site types are unambiguous.
+```sh
+make tep_demo/api          # via spinel directly (bypasses tep translator)
+nohup ./tep_demo/api > /tmp/api.log 2>&1 &
+curl -s "http://localhost:4567/generate?n=5"
+```
+
+Numbers on gx10, model = `vocab=16, d_model=32, d_ff=64, n_heads=4,
+n_layers=2, T=16`, prompt `[3,7,1]`, 1 worker, Connection: close:
+
+| Request shape       | Threads | Throughput   | Tokens/sec |
+|---|---|---:|---:|
+| `/generate?n=5`     |   1  |  1,314 req/s |   6,570 |
+| `/generate?n=5`     |   4  |  1,758 req/s |   8,790 |
+| `/generate?n=5`     |   8  |  1,706 req/s |   8,529 |
+| `/generate?n=5`     |  16  |  2,738 req/s |  13,689 |
+| `/generate?n=10`    |   4  |    920 req/s |   9,201 |
+| `/generate?n=32`*   |   4  |    308 req/s |   9,868 |
+
+\* `n=32` exceeds the realized `T_SEQ=16`, so generation after token 16
+gets the wrong context — the bench measures HTTP+forward throughput,
+not coherent generation. With KV cache (M2) per-token compute becomes
+1 position instead of T_SEQ, projecting an order-of-magnitude
+improvement at long contexts.
+
+Built with **Spinel master @ `85a4670`+** (the poly-recv suppression
+fix in `4024216` is needed; before that, the build hit a dispatch bug
+between `Mat#add` and `Tep::Router#add`). We renamed `Mat#add` →
+`Mat#plus` in `lib/transformer.rb` to fully sidestep the arity-mismatch
+flavour of that bug — `Mat#add!` (the in-place variant) keeps its
+name since method NAMES are what collide.
 
 The `_tep_lib/` directory holds a placeholder-substituted copy of
 `~/sites/tep/lib` — needed because our build bypasses tep's translator

@@ -119,7 +119,7 @@ cmp("matmul",  a.matmul(b), TinyNNCuda.matmul(a, b), 1.0e-4)
 b_add = Mat.new(2, 3)
 b_add.flat[0] = -1.0; b_add.flat[1] = 0.5; b_add.flat[2] = 2.0
 b_add.flat[3] =  3.0; b_add.flat[4] = -4.0; b_add.flat[5] = 5.0
-cmp("add",     a.add(b_add),    TinyNNCuda.add(a, b_add), 1.0e-4)
+cmp("add",     a.plus(b_add),    TinyNNCuda.add(a, b_add), 1.0e-4)
 
 # --- gelu: 1x5 ---
 g = Mat.new(1, 5)
