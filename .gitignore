@@ -64,3 +64,5 @@ tep_demo/_tep_lib/
 tinynn/ab_smoke_kv_attn
 data/*.gguf
 prep/_hf_cache/
+data/prompt_ids.txt
+distilgpt2_demo

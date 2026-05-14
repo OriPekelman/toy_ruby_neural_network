@@ -321,6 +321,13 @@ gpt2-load-smoke: tinynn/gpt2_load_smoke
 tinynn/gpt2_load_smoke: tinynn/gpt2_load_smoke.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/gpt2_load_smoke.rb -o tinynn/gpt2_load_smoke
 
+# End-to-end distilgpt2 inference demo. Reads pre-tokenized IDs from
+# data/prompt_ids.txt, loads weights from data/distilgpt2-f32.gguf,
+# greedy-generates N_NEW tokens via native Mat forward, writes the
+# full ID sequence back. Decode with prep/tokens.py decode.
+distilgpt2_demo: distilgpt2_demo.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed
 
