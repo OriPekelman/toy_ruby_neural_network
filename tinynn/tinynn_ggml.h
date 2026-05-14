@@ -128,6 +128,11 @@ void   tnn_adam_step_scratch(void *sess, int n,
  * called once after all ops are declared and before any upload. */
 int    tnn_realize(void *sess, void *result);
 
+/* Add a tensor's compute tree to the graph before tnn_realize. Used
+ * for side-effect ops (ggml_cpy into a persistent view) that aren't
+ * reachable from the realize target and would otherwise be pruned. */
+int    tnn_add_to_graph(void *sess, void *tensor);
+
 /* Reset the session for a fresh graph build. The persistent ctx_w
  * tensors keep their data; the compute graph and its node tensors
  * are replaced. Use for per-step decode where op offsets (e.g. V

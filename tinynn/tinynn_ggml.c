@@ -582,6 +582,19 @@ int tnn_realize(void *sess, void *result)
     return 0;
 }
 
+/* Add an extra tensor's compute tree to the graph BEFORE tnn_realize.
+ * Use for side-effect ops (ggml_cpy into a view) that aren't reachable
+ * from the final result tensor — without this they'd be pruned. The
+ * realize-target's tree is appended later by tnn_realize itself. */
+int tnn_add_to_graph(void *sess, void *tensor)
+{
+    if (!sess || !tensor) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    if (s->realized) return -2;
+    ggml_build_forward_expand(s->graph, (struct ggml_tensor *)tensor);
+    return 0;
+}
+
 /* Reset for rebuild: clear realized flag and start a fresh cgraph in
  * the SAME ctx. The persistent backend buffer (ctx_w) is untouched,
  * so persistent tensors keep their data. The previous cgraph's nodes
