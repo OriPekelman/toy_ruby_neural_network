@@ -17,6 +17,12 @@
 # Requires the Spinel patch to infer_ivar_init_type that propagates the
 # fill-type from `Array.new(n, 0.0)` into the containing class's struct.
 
+# The FFN's two matmuls go through TinyNN (ggml-CPU FFI) when this is
+# true.  Off by default to keep the toy zero-dep; flip on to use the
+# bridge and accelerate at real-LLM scale (see tinynn/README.md).
+USE_FFI_MATMUL = false
+require_relative "tinynn" if USE_FFI_MATMUL
+
 # ============================================================================
 #   Mat: 2D float matrix, flat-storage. Indexed as flat[i * ncols + j].
 # ============================================================================
@@ -622,7 +628,11 @@ class TransformerLM
   # GeLU uses the tanh approximation: 0.5 x (1 + tanh(c (x + 0.044715 x³))),
   # c = √(2/π).
   def feed_forward(h, block)
-    pre = h.matmul(block.w_ff1)
+    if USE_FFI_MATMUL
+      pre = TinyNN.matmul(h, block.w_ff1)
+    else
+      pre = h.matmul(block.w_ff1)
+    end
     hidden = Mat.new(pre.nrows, pre.ncols)
     c = 0.7978845608028654   # sqrt(2/pi)
     n = pre.nrows * pre.ncols
@@ -633,7 +643,11 @@ class TransformerLM
       hidden.flat[i] = 0.5 * x * (1.0 + Math.tanh(u))
       i += 1
     end
-    out = hidden.matmul(block.w_ff2)
+    if USE_FFI_MATMUL
+      out = TinyNN.matmul(hidden, block.w_ff2)
+    else
+      out = hidden.matmul(block.w_ff2)
+    end
     FFResult.new(out, FFCache.new(pre, hidden))
   end
 

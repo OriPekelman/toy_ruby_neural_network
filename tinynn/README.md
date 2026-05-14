@@ -217,13 +217,38 @@ lands typed-array FFI.
 
 ## Upstream status
 
-- [`matz/spinel#473`](https://github.com/matz/spinel/issues/473) —
-  `train_minimal` SIGBUS in `sp_gc_alloc` during backward. Blocks
-  *end-to-end* training verification, not the bridge itself.
-- [`matz/spinel#474`](https://github.com/matz/spinel/issues/474) —
-  `:float_array` / `:int_array` FFI type specs for zero-copy bulk
-  transfer. Eliminates the ~37 ms/iter upload-loop cost in the
-  real-LLM-shape numbers above.
+- [`matz/spinel#473`](https://github.com/matz/spinel/issues/473) — ✅
+  closed 2026-05-14 by `0905114 fix(codegen): clear ptr ivars after
+  SP_POOL_NEW before init body runs`. `train_minimal` runs end-to-end
+  again at master.
+- [`matz/spinel#474`](https://github.com/matz/spinel/issues/474) — ✅
+  closed 2026-05-14 by `a45f8db feat(ffi): :float_array / :int_array
+  specs for zero-copy bulk transfer`. Bridge now uses these via
+  `tnn_upload_from_float_array` / `tnn_upload_from_int_array`. The
+  CPU LLM-scale bench dropped from 57 ms/iter to 29 ms/iter; CUDA
+  toy-shape persistent dropped from 4.7 ms/iter to 22 µs/iter.
+- [`ggml-org/ggml#1491`](https://github.com/ggml-org/ggml/issues/1491) —
+  open. `ggml_rms_norm_back` produces a different result via
+  `ggml_backend_sched_graph_compute` than via the legacy
+  `ggml_graph_compute_with_ctx`. Standalone C repro in `tinynn/`.
+  Blocks `TinyNN.rms_norm_back` parity.
+
+## Wiring into `lib/transformer.rb`
+
+`feed_forward`'s two matmuls can dispatch through `TinyNN.matmul`
+instead of `Mat#matmul`. Flip the constant at the top of
+`lib/transformer.rb`:
+
+```ruby
+USE_FFI_MATMUL = true   # was false; require_relative "tinynn" only when true
+```
+
+`train_minimal` then converges identically (loss → ~0.035 at step 36)
+through the FFI path. Anything else in the project that goes through
+`feed_forward` (i.e. `train_tinystories`) inherits the swap.
+
+Pure Ruby is still the default (`= false`) so the toy stays zero-dep;
+flip on whenever you want the ~45× LLM-shape speedup.
 
 ## What's not here yet
 
