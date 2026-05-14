@@ -262,6 +262,18 @@ void *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps)
     return (void *)ggml_mul(s->ctx, normed, (struct ggml_tensor *)gamma_row);
 }
 
+/* Causal mask: sets elements ABOVE the diagonal (i.e. positions where
+ * key_idx > query_idx + n_past) to -inf, so subsequent softmax zeroes
+ * them. n_past = 0 gives the standard causal mask for training. For
+ * KV-cache inference, n_past = current position so attention can see
+ * cached keys plus the current token but not future tokens. */
+void *tnn_diag_mask_inf(void *sess, void *a, int n_past)
+{
+    if (!sess || !a) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_diag_mask_inf(s->ctx, (struct ggml_tensor *)a, n_past);
+}
+
 void *tnn_softmax(void *sess, void *a)
 {
     if (!sess || !a) return NULL;

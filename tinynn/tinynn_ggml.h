@@ -63,6 +63,8 @@ void  *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps);
                                                             x: (n1, n0) with ne0=feature, ne1=batch_or_T
                                                             gamma_row: (1, n0) — a 1xfeature tensor */
 void  *tnn_softmax(void *sess, void *a);                /* per-row softmax along ne[0] */
+void  *tnn_diag_mask_inf(void *sess, void *a, int n_past);
+                                                         /* set elements above the diagonal (off by n_past) to -inf */
 void  *tnn_transpose(void *sess, void *a);              /* materialised transpose: (rows,cols) → (cols,rows) */
 void  *tnn_scale(void *sess, void *a, double s);        /* element-wise a * s */
 
