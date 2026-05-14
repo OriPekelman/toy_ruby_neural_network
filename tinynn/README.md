@@ -234,6 +234,29 @@ work in the same wallclock; native ggml-cpu would be ≤10 ms/iter,
 and the remaining ~19 ms is the dequantize-on-upload f64→f32 loop
 in the bulk-upload primitive.
 
+### Full-forward graph (`FullForwardFFICache`) — milestone M1
+
+`FullForwardFFICache` runs an entire transformer model forward as one
+persistent ggml graph: embed lookup → per-block (RMSNorm →
+multi-head causal attention → residual → RMSNorm → FFN → residual)
+→ final RMSNorm → tied unembed. Weights live in `ctx_w` (uploaded
+once); per call only `token_ids` cross the FFI boundary.
+
+```
+vocab=4096 d_model=384 d_ff=1024 n_heads=6 n_layers=6 T=128, 10 iters:
+  native           : 1179.9 ms/iter
+  CPU FFI          :   31.0 ms/iter   38.1× speedup
+  CUDA FFI         :   33.7 ms/iter   33.9× speedup
+```
+
+(CPU edges out CUDA at this scale because ggml-cpu's SIMD matmul is
+fast enough that the per-step kernel-launch overhead on CUDA matches
+it. CUDA pulls ahead at larger `d_model` / longer `T`.)
+
+Parity vs native `TransformerLM.forward()` at `n_layers=2, n_heads=4,
+d_model=16, d_ff=32` matches to `max_abs_diff = 1.4e-4` (within f32 +
+ggml's f16-LUT GeLU tolerance).
+
 ### End-to-end train_minimal (40 SGD steps × 3 sequences, toy shape)
 
 ```

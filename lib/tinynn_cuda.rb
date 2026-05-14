@@ -623,6 +623,11 @@ module TinyNNCuda
     TinyNNCuda.tnn_upload_from_float_array(sess, tensor, mat.flat, mat.nrows * mat.ncols)
   end
 
+  # Upload an Array<Int> to a 1D int32 tensor in one FFI call.
+  def self.upload_int_array(sess, tensor, indices)
+    TinyNNCuda.tnn_upload_from_int_array(sess, tensor, indices, indices.length)
+  end
+
   def self.upload_transposed(sess, tensor, mat)
     br = mat.nrows
     bc = mat.ncols
@@ -668,5 +673,242 @@ module TinyNNCuda
       i = i + 1
     end
     out
+  end
+end
+
+# === FullForwardFFICacheCuda mirror (M1 family) ===
+# Per-block tensor handles for FullForwardFFICache. One instance per
+# transformer block. All ivars are :ptr handles (or arrays thereof);
+# the actual ggml tensors live in the FullForwardFFICache's session.
+class BlockFFICacheCuda
+  attr_accessor :t_norm1_gamma, :t_norm2_gamma,
+                :t_w_q, :t_w_k, :t_w_v,   # Array<:ptr>, one per head
+                :t_w_o, :t_w_ff1, :t_w_ff2
+
+  def initialize
+    @t_norm1_gamma = nil
+    @t_norm2_gamma = nil
+    # Note: Spinel currently types these arrays as `IntArray` rather
+    # than `PtrArray` because the FFI's `:ptr` value model is integer-
+    # backed (a long-sized address). The runtime is correct because
+    # pointer values fit in `mrb_int` on 64-bit platforms — every
+    # FFI call that takes the element gets a `void *` produced by a
+    # silent long-to-pointer conversion (cc emits a warning but the
+    # bit pattern round-trips). On a 32-bit platform this would break.
+    # Seeded with `tnn_null_ptr` rather than `[nil]` so the intent is
+    # clear in source even though Spinel infers the same way either way.
+    @t_w_q   = [TinyNNCuda.tnn_null_ptr]
+    @t_w_k   = [TinyNNCuda.tnn_null_ptr]
+    @t_w_v   = [TinyNNCuda.tnn_null_ptr]
+    @t_w_o   = nil
+    @t_w_ff1 = nil
+    @t_w_ff2 = nil
+  end
+end
+
+# Full forward of a TransformerLM as one persistent ggml graph. Built
+# incrementally; M1.1 covered embed + positional embedding + tied
+# unembed (the bookends). M1.2 adds one full transformer block:
+# pre-RMSNorm, multi-head causal attention, residual, pre-RMSNorm, FFN,
+# residual. M1.3+ will scale to n_layers blocks.
+#
+# Layout conventions (see project_chained_ffn_2026_05_14):
+#   - Mat (rows, cols) row-major upload  -> ggml ne=[cols, rows]
+#   - Per-block intermediates carry ne=[d_model, T]: elem(d, t) is the
+#     logical value at (row=t, col=d).
+#
+# Persistent (ctx_w):
+#   - t_token_embed (vocab, d_model)
+#   - t_pos_slice   (T, d_model)
+#   - t_final_norm_gamma (d_model)
+#   - per block (in @blocks_ffi):
+#     - t_norm1_gamma, t_norm2_gamma (d_model)
+#     - t_w_q[h], t_w_k[h], t_w_v[h] (d_model, d_head) per head
+#     - t_w_o   (d_model, d_model)
+#     - t_w_ff1 (d_model, d_ff), t_w_ff2 (d_ff, d_model)
+#
+# Compute (ctx):       t_token_ids (T int32), intermediates, t_logits
+class FullForwardFFICacheCuda
+  attr_accessor :sess, :t_token_embed, :t_pos_slice, :t_token_ids,
+                :t_final_norm_gamma,
+                :blocks_ffi,
+                :t_x_embed, :t_x_final, :t_logits,
+                :t_seq, :d_model, :d_ff, :n_heads, :d_head, :n_layers,
+                :vocab_size, :realized
+
+  def initialize
+    @realized   = false
+    @t_seq      = 0
+    @d_model    = 0
+    @d_ff       = 0
+    @n_heads    = 0
+    @d_head     = 0
+    @n_layers   = 0
+    @vocab_size = 0
+    @sess               = nil
+    @t_token_embed      = nil
+    @t_pos_slice        = nil
+    @t_token_ids        = nil
+    @t_final_norm_gamma = nil
+    @t_x_embed          = nil
+    @t_x_final          = nil
+    @t_logits           = nil
+    @blocks_ffi         = [BlockFFICacheCuda.new]
+  end
+
+  def realize_for(t_seq, d_model, d_ff, n_heads, n_layers, vocab_size)
+    @t_seq      = t_seq
+    @d_model    = d_model
+    @d_ff       = d_ff
+    @n_heads    = n_heads
+    @d_head     = d_model / n_heads
+    @n_layers   = n_layers
+    @vocab_size = vocab_size
+
+    @sess = TinyNNCuda.tnn_session_new(1)
+
+    # === Persistent weights (ctx_w) ===
+    @t_token_embed      = TinyNNCuda.tnn_input_2d_f32_persistent(@sess, vocab_size, d_model)
+    @t_pos_slice        = TinyNNCuda.tnn_input_2d_f32_persistent(@sess, t_seq,      d_model)
+    @t_final_norm_gamma = TinyNNCuda.tnn_input_1d_f32_persistent(@sess, d_model)
+
+    # Build per-block tensor handles (seed-then-push for Spinel's
+    # Array<BlockFFICache> inference).
+    @blocks_ffi = [BlockFFICacheCuda.new]
+    li = 1
+    while li < n_layers
+      @blocks_ffi.push(BlockFFICacheCuda.new)
+      li = li + 1
+    end
+
+    li = 0
+    while li < n_layers
+      blk = @blocks_ffi[li]
+      blk.t_norm1_gamma = TinyNNCuda.tnn_input_1d_f32_persistent(@sess, d_model)
+      blk.t_norm2_gamma = TinyNNCuda.tnn_input_1d_f32_persistent(@sess, d_model)
+      # Per-head Q/K/V: shape (d_model, d_head). Uploaded TRANSPOSED so
+      # ggml ne=[d_model, d_head] holds w.elem(r, c) = w[r][c].
+      blk.t_w_q = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model)]
+      blk.t_w_k = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model)]
+      blk.t_w_v = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model)]
+      h = 1
+      while h < n_heads
+        blk.t_w_q.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model))
+        blk.t_w_k.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model))
+        blk.t_w_v.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model))
+        h = h + 1
+      end
+      blk.t_w_o   = TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_model, d_model)
+      blk.t_w_ff1 = TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_ff,    d_model)
+      blk.t_w_ff2 = TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_model, d_ff)
+      li = li + 1
+    end
+
+    TinyNNCuda.tnn_finalize_weights(@sess)
+
+    # === Compute input ===
+    @t_token_ids = TinyNNCuda.tnn_input_1d_i32(@sess, t_seq)
+
+    # === Forward graph ===
+    # x_embed = token_embed[ids] + pos_slice  (ne=[d_model, T])
+    t_embedded = TinyNNCuda.tnn_get_rows(@sess, @t_token_embed, @t_token_ids)
+    @t_x_embed = TinyNNCuda.tnn_add(@sess, t_embedded, @t_pos_slice)
+    TinyNNCuda.tnn_set_output(@t_x_embed)
+
+    # Through each block.
+    t_cur = @t_x_embed
+    eps   = 1.0e-5
+    scale = 1.0 / Math.sqrt(d_head.to_f)
+    li = 0
+    while li < n_layers
+      t_cur = build_block(t_cur, @blocks_ffi[li], eps, scale)
+      li = li + 1
+    end
+
+    # Final RMSNorm on the post-blocks x.
+    @t_x_final = TinyNNCuda.tnn_rms_norm(@sess, t_cur, @t_final_norm_gamma, eps)
+    TinyNNCuda.tnn_set_output(@t_x_final)
+
+    # Tied unembed: logits = mul_mat(token_embed, x_final)  ne=[vocab, T]
+    @t_logits = TinyNNCuda.tnn_matmul(@sess, @t_token_embed, @t_x_final)
+    TinyNNCuda.tnn_set_output(@t_logits)
+
+    TinyNNCuda.tnn_realize(@sess, @t_logits)
+    @realized = true
+  end
+
+  # Build one transformer block's graph nodes. Returns the block's
+  # output tensor (post-FFN residual). Mathematics:
+  #   h1 = rms_norm(x, norm1_gamma)
+  #   per head h:
+  #     q_h = w_q[h]^T @ h1     (mul_mat(w_q_t_h, h1)  ne=[d_head, T])
+  #     k_h = w_k[h]^T @ h1
+  #     v_h = h1 @ w_v[h]       (mul_mat(h1, w_v_t_h)  ne=[T, d_head])
+  #     scores_h = mul_mat(k_h, q_h)   ne=[T_key, T_query]
+  #     scaled_h = scale(scores_h, 1/sqrt(d_head))
+  #     masked_h = diag_mask_inf(scaled_h, 0)         -- causal
+  #     attn_h   = soft_max(masked_h)  -- per-query softmax over keys
+  #     head_out_h = mul_mat(v_h, attn_h)  ne=[d_head, T_query]
+  #   concat = concat_along_d(head_out_h for h in heads)  ne=[d_model, T]
+  #   out_proj = mul_mat(w_o_t, concat)  ne=[d_model, T]
+  #   x_attn = x + out_proj
+  #   h2 = rms_norm(x_attn, norm2_gamma)
+  #   ffn:
+  #     pre    = mul_mat(w_ff1_t, h2)   ne=[d_ff,    T]
+  #     hidden = gelu(pre)
+  #     ffn_out= mul_mat(w_ff2_t, hidden) ne=[d_model, T]
+  #   x_out = x_attn + ffn_out
+  def build_block(t_x, blk, eps, scale)
+    # Pre-norm before attention.
+    t_h1 = TinyNNCuda.tnn_rms_norm(@sess, t_x, blk.t_norm1_gamma, eps)
+
+    # Per-head attention. Build each head's output, then concat.
+    t_head_outs = [build_attention_head(t_h1, blk.t_w_q[0], blk.t_w_k[0], blk.t_w_v[0], scale)]
+    h = 1
+    while h < @n_heads
+      t_head_outs.push(build_attention_head(t_h1, blk.t_w_q[h], blk.t_w_k[h], blk.t_w_v[h], scale))
+      h = h + 1
+    end
+
+    # Concat along ne0 (d_head -> d_model).
+    t_concat = t_head_outs[0]
+    h = 1
+    while h < @n_heads
+      t_concat = TinyNNCuda.tnn_concat(@sess, t_concat, t_head_outs[h], 0)
+      h = h + 1
+    end
+
+    # Output projection + residual.
+    t_out_proj = TinyNNCuda.tnn_matmul(@sess, blk.t_w_o, t_concat)
+    t_x_attn   = TinyNNCuda.tnn_add(@sess, t_x, t_out_proj)
+
+    # Pre-norm before FFN.
+    t_h2 = TinyNNCuda.tnn_rms_norm(@sess, t_x_attn, blk.t_norm2_gamma, eps)
+
+    # FFN (matches FFNFFICache's chained design).
+    t_pre    = TinyNNCuda.tnn_matmul(@sess, blk.t_w_ff1, t_h2)
+    t_hidden = TinyNNCuda.tnn_gelu(@sess, t_pre)
+    t_ffn    = TinyNNCuda.tnn_matmul(@sess, blk.t_w_ff2, t_hidden)
+
+    # Second residual.
+    TinyNNCuda.tnn_add(@sess, t_x_attn, t_ffn)
+  end
+
+  # Single attention head, given pre-normed x and the head's persistent
+  # Q/K/V weights. See build_block's docstring for the math.
+  def build_attention_head(t_x, t_w_q, t_w_k, t_w_v, scale)
+    t_q = TinyNNCuda.tnn_matmul(@sess, t_w_q, t_x)   # ne=[d_head, T]
+    t_k = TinyNNCuda.tnn_matmul(@sess, t_w_k, t_x)   # ne=[d_head, T]
+    # v in Pattern A (ne=[T, d_head]) so head_out's k_dim matches.
+    # mul_mat(x, w_v_t) where x.ne=[d_model, T] and w_v_t.ne=[d_model, d_head]
+    # yields ne=[T, d_head]. ✓
+    t_v = TinyNNCuda.tnn_matmul(@sess, t_x, t_w_v)
+
+    t_scores = TinyNNCuda.tnn_matmul(@sess, t_k, t_q)            # ne=[T_key, T_query]
+    t_scaled = TinyNNCuda.tnn_scale(@sess, t_scores, scale)
+    t_masked = TinyNNCuda.tnn_diag_mask_inf(@sess, t_scaled, 0)
+    t_attn   = TinyNNCuda.tnn_softmax(@sess, t_masked)           # softmax along ne0 = key dim
+
+    TinyNNCuda.tnn_matmul(@sess, t_v, t_attn)                    # ne=[d_head, T_query]
   end
 end

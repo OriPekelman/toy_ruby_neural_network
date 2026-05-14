@@ -193,6 +193,12 @@ full-forward-bench: tinynn/full_forward_bench
 tinynn/full_forward_bench: tinynn/full_forward_bench.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/full_forward_bench.rb -o tinynn/full_forward_bench
 
+full-forward-bench-cuda: tinynn/full_forward_bench_cuda
+	./tinynn/full_forward_bench_cuda
+
+tinynn/full_forward_bench_cuda: tinynn/full_forward_bench_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+	$(SPINEL) tinynn/full_forward_bench_cuda.rb -o tinynn/full_forward_bench_cuda
+
 ab-smoke-dual-graph-cuda: tinynn/ab_smoke_dual_graph_cuda
 	./tinynn/ab_smoke_dual_graph_cuda
 

@@ -1,9 +1,9 @@
-# Wallclock bench: native TransformerLM.forward vs FullForwardFFICache
+# Wallclock bench: native TransformerLM.forward vs FullForwardFFICacheCuda
 # at a "more than toy" shape (vocab=64, d_model=64, d_ff=128, n_heads=4,
 # n_layers=2, T=32). 20 iterations each, deterministic weights.
 
 require_relative "../lib/transformer"
-require_relative "../lib/tinynn"
+require_relative "../lib/tinynn_cuda"
 
 VOCAB    = 4096
 D_MODEL  = 384
@@ -57,49 +57,49 @@ t1 = Time.now
 nat_ms = (t1 - t0) * 1000.0
 
 # ----- FFI: realize once, then loop forward -----
-cache = FullForwardFFICache.new
+cache = FullForwardFFICacheCuda.new
 cache.realize_for(T_SEQ, D_MODEL, D_FF, N_HEADS, N_LAYERS, VOCAB)
 
-TinyNN.upload_row_major(cache.sess, cache.t_token_embed, model.token_embed)
+TinyNNCuda.upload_row_major(cache.sess, cache.t_token_embed, model.token_embed)
 pos_slice = Mat.new(T_SEQ, D_MODEL)
 i = 0
 while i < T_SEQ * D_MODEL
   pos_slice.flat[i] = model.pos_embed.flat[i]
   i = i + 1
 end
-TinyNN.upload_row_major(cache.sess, cache.t_pos_slice, pos_slice)
-TinyNN.tnn_upload_from_float_array(cache.sess, cache.t_final_norm_gamma,
+TinyNNCuda.upload_row_major(cache.sess, cache.t_pos_slice, pos_slice)
+TinyNNCuda.tnn_upload_from_float_array(cache.sess, cache.t_final_norm_gamma,
                                     model.norm_final_gamma, D_MODEL)
 li = 0
 while li < N_LAYERS
   blk_n = model.blocks[li]
   blk_f = cache.blocks_ffi[li]
-  TinyNN.tnn_upload_from_float_array(cache.sess, blk_f.t_norm1_gamma, blk_n.norm1_gamma, D_MODEL)
-  TinyNN.tnn_upload_from_float_array(cache.sess, blk_f.t_norm2_gamma, blk_n.norm2_gamma, D_MODEL)
+  TinyNNCuda.tnn_upload_from_float_array(cache.sess, blk_f.t_norm1_gamma, blk_n.norm1_gamma, D_MODEL)
+  TinyNNCuda.tnn_upload_from_float_array(cache.sess, blk_f.t_norm2_gamma, blk_n.norm2_gamma, D_MODEL)
   h = 0
   while h < N_HEADS
-    TinyNN.stage_transposed_and_upload(cache.sess, blk_f.t_w_q[h], blk_n.w_q[h])
-    TinyNN.stage_transposed_and_upload(cache.sess, blk_f.t_w_k[h], blk_n.w_k[h])
-    TinyNN.stage_transposed_and_upload(cache.sess, blk_f.t_w_v[h], blk_n.w_v[h])
+    TinyNNCuda.stage_transposed_and_upload(cache.sess, blk_f.t_w_q[h], blk_n.w_q[h])
+    TinyNNCuda.stage_transposed_and_upload(cache.sess, blk_f.t_w_k[h], blk_n.w_k[h])
+    TinyNNCuda.stage_transposed_and_upload(cache.sess, blk_f.t_w_v[h], blk_n.w_v[h])
     h = h + 1
   end
-  TinyNN.stage_transposed_and_upload(cache.sess, blk_f.t_w_o,   blk_n.w_o)
-  TinyNN.stage_transposed_and_upload(cache.sess, blk_f.t_w_ff1, blk_n.w_ff1)
-  TinyNN.stage_transposed_and_upload(cache.sess, blk_f.t_w_ff2, blk_n.w_ff2)
+  TinyNNCuda.stage_transposed_and_upload(cache.sess, blk_f.t_w_o,   blk_n.w_o)
+  TinyNNCuda.stage_transposed_and_upload(cache.sess, blk_f.t_w_ff1, blk_n.w_ff1)
+  TinyNNCuda.stage_transposed_and_upload(cache.sess, blk_f.t_w_ff2, blk_n.w_ff2)
   li = li + 1
 end
 
 # Warm one FFI call.
-TinyNN.upload_int_array(cache.sess, cache.t_token_ids, ids)
-TinyNN.tnn_compute(cache.sess)
-_ = TinyNN.download_row_major(cache.sess, cache.t_logits, T_SEQ, VOCAB)
+TinyNNCuda.upload_int_array(cache.sess, cache.t_token_ids, ids)
+TinyNNCuda.tnn_compute(cache.sess)
+_ = TinyNNCuda.download_row_major(cache.sess, cache.t_logits, T_SEQ, VOCAB)
 
 t0 = Time.now
 i = 0
 while i < ITERS
-  TinyNN.upload_int_array(cache.sess, cache.t_token_ids, ids)
-  TinyNN.tnn_compute(cache.sess)
-  _ = TinyNN.download_row_major(cache.sess, cache.t_logits, T_SEQ, VOCAB)
+  TinyNNCuda.upload_int_array(cache.sess, cache.t_token_ids, ids)
+  TinyNNCuda.tnn_compute(cache.sess)
+  _ = TinyNNCuda.download_row_major(cache.sess, cache.t_logits, T_SEQ, VOCAB)
   i = i + 1
 end
 t1 = Time.now
@@ -111,4 +111,4 @@ puts "Native forward  " + ITERS.to_s + " iters: " + nat_ms.to_s + " ms  (" + (na
 puts "FFI    forward  " + ITERS.to_s + " iters: " + ffi_ms.to_s + " ms  (" + (ffi_ms / ITERS.to_f).to_s + " ms/iter)"
 speedup = nat_ms / ffi_ms
 puts "Speedup: " + speedup.to_s + "x"
-TinyNN.tnn_session_free(cache.sess)
+TinyNNCuda.tnn_session_free(cache.sess)

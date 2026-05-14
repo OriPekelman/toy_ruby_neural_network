@@ -1162,3 +1162,26 @@ module TinyNN
     out
   end
 end
+
+
+# Spinel #490 workaround: anchor the param types of library-style methods
+# whose only callers are in tinynn_cuda.rb's mirrored helpers. Without
+# this `if false` block, callers from a CUDA-only compilation unit leave
+# these methods' params unconstrained → Spinel infers `Int`, the body
+# fails C compile on `param.length` / `param.flat` / etc.
+#
+# The block is unreachable at runtime; Spinel's whole-program type
+# inference still picks up the call signatures.
+if false
+  _anchor_sess  = TinyNN.tnn_null_ptr
+  _anchor_tensr = TinyNN.tnn_null_ptr
+  _anchor_ids   = [0]
+  TinyNN.upload_int_array(_anchor_sess, _anchor_tensr, _anchor_ids)
+  _anchor_mat   = Mat.new(1, 1)
+  TinyNN.upload_row_major(_anchor_sess, _anchor_tensr, _anchor_mat)
+  TinyNN.stage_transposed_and_upload(_anchor_sess, _anchor_tensr, _anchor_mat)
+  TinyNN.upload_transposed(_anchor_sess, _anchor_tensr, _anchor_mat)
+  TinyNN.stage_row_major_and_upload(_anchor_sess, _anchor_tensr, _anchor_mat)
+  TinyNN.download_row_major(_anchor_sess, _anchor_tensr, 1, 1)
+  TinyNN.download_matmul(_anchor_sess, _anchor_tensr, 1, 1)
+end
