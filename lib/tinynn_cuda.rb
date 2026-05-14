@@ -23,6 +23,50 @@ class AdamStepResult
   end
 end
 
+# Same FFNFFICache as lib/tinynn.rb but uses TinyNNCuda.  Drivers
+# require exactly one of {tinynn, tinynn_cuda}; the chosen module
+# defines FFNFFICache and the FFI-lib markers for its backend.
+class FFNFFICache
+  attr_accessor :sess1, :t_h, :t_w1_t, :tc1,
+                :sess2, :t_hidden, :t_w2_t, :tc2,
+                :t_seq, :d_model, :d_ff, :realized
+
+  def initialize
+    @realized = false
+    @t_seq    = 0
+    @d_model  = 0
+    @d_ff     = 0
+    @sess1    = nil
+    @t_h      = nil
+    @t_w1_t   = nil
+    @tc1      = nil
+    @sess2    = nil
+    @t_hidden = nil
+    @t_w2_t   = nil
+    @tc2      = nil
+  end
+
+  def realize_for(t_seq, d_model, d_ff)
+    @t_seq   = t_seq
+    @d_model = d_model
+    @d_ff    = d_ff
+
+    @sess1  = TinyNNCuda.tnn_session_new(1)
+    @t_h    = TinyNNCuda.tnn_input_2d_f32(@sess1, t_seq, d_model)
+    @t_w1_t = TinyNNCuda.tnn_input_2d_f32(@sess1, d_ff, d_model)
+    @tc1    = TinyNNCuda.tnn_matmul(@sess1, @t_h, @t_w1_t)
+    TinyNNCuda.tnn_realize(@sess1, @tc1)
+
+    @sess2    = TinyNNCuda.tnn_session_new(1)
+    @t_hidden = TinyNNCuda.tnn_input_2d_f32(@sess2, t_seq, d_ff)
+    @t_w2_t   = TinyNNCuda.tnn_input_2d_f32(@sess2, d_model, d_ff)
+    @tc2      = TinyNNCuda.tnn_matmul(@sess2, @t_hidden, @t_w2_t)
+    TinyNNCuda.tnn_realize(@sess2, @tc2)
+
+    @realized = true
+  end
+end
+
 module TinyNNCuda
   ffi_lib "tinynn_ggml_cuda"
   ffi_lib "ggml"
