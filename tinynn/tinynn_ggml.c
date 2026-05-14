@@ -582,6 +582,25 @@ int tnn_realize(void *sess, void *result)
     return 0;
 }
 
+/* Reset for rebuild: clear realized flag and start a fresh cgraph in
+ * the SAME ctx. The persistent backend buffer (ctx_w) is untouched,
+ * so persistent tensors keep their data. The previous cgraph's nodes
+ * stay in ctx (it grows monotonically); after enough rebuilds the
+ * ctx_buf runs out. For up to ~10000 short-rebuild cycles at our
+ * default ctx_buf size that's not a concern. Per decode step:
+ *   tnn_reset_for_rebuild(sess)
+ *   ... build ops with current pos baked in ...
+ *   tnn_realize(sess, result_tensor)
+ *   ... upload, compute, download ... */
+int tnn_reset_for_rebuild(void *sess)
+{
+    if (!sess) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    s->realized = 0;
+    s->graph    = ggml_new_graph(s->ctx);
+    return 0;
+}
+
 int tnn_compute(void *sess)
 {
     if (!sess) return -1;

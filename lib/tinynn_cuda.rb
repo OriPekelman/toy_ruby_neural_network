@@ -112,6 +112,7 @@ module TinyNNCuda
   ffi_func :tnn_set_rows,         [:ptr, :ptr, :ptr, :ptr], :ptr
   ffi_func :tnn_soft_max_ext,     [:ptr, :ptr, :ptr, :double, :double], :ptr
   ffi_func :tnn_set_2d,           [:ptr, :ptr, :ptr, :long, :long], :ptr
+  ffi_func :tnn_reset_for_rebuild, [:ptr],                  :int
   ffi_func :tnn_scale,            [:ptr, :ptr, :double],    :ptr
   ffi_func :tnn_softmax_back,     [:ptr, :ptr, :ptr],       :ptr
   ffi_func :tnn_get_rows,         [:ptr, :ptr, :ptr],       :ptr

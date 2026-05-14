@@ -128,6 +128,12 @@ void   tnn_adam_step_scratch(void *sess, int n,
  * called once after all ops are declared and before any upload. */
 int    tnn_realize(void *sess, void *result);
 
+/* Reset the session for a fresh graph build. The persistent ctx_w
+ * tensors keep their data; the compute graph and its node tensors
+ * are replaced. Use for per-step decode where op offsets (e.g. V
+ * set_2d's pos*sizeof(float)) need to change between steps. */
+int    tnn_reset_for_rebuild(void *sess);
+
 /* Mark a tensor as a graph output so the backend scheduler keeps its
  * buffer alive after compute (otherwise intermediate buffers may be
  * reused as scratch by later ops, in particular ggml_gelu can reuse
