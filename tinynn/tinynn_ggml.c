@@ -262,6 +262,27 @@ void *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps)
     return (void *)ggml_mul(s->ctx, normed, (struct ggml_tensor *)gamma_row);
 }
 
+/* Returns a NULL pointer typed as :ptr. Useful as an Array<:ptr> seed
+ * value so Spinel infers the array as a PtrArray rather than typing
+ * it from a `[nil]` literal (which can resolve to IntArray). */
+void *tnn_null_ptr(void)
+{
+    return NULL;
+}
+
+/* Concatenate `a` and `b` along the given dim (0 = ne[0], 1 = ne[1]).
+ * Other dims must match. Used to glue per-head attention outputs into
+ * a single (d_model, T) tensor by stacking d_head slices along ne0. */
+void *tnn_concat(void *sess, void *a, void *b, int dim)
+{
+    if (!sess || !a || !b) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_concat(s->ctx,
+                                (struct ggml_tensor *)a,
+                                (struct ggml_tensor *)b,
+                                dim);
+}
+
 /* Causal mask: sets elements ABOVE the diagonal (i.e. positions where
  * key_idx > query_idx + n_past) to -inf, so subsequent softmax zeroes
  * them. n_past = 0 gives the standard causal mask for training. For

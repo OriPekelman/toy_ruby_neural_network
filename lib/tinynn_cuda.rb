@@ -103,6 +103,8 @@ module TinyNNCuda
   ffi_func :tnn_rms_norm,         [:ptr, :ptr, :ptr, :double], :ptr
   ffi_func :tnn_softmax,          [:ptr, :ptr],             :ptr
   ffi_func :tnn_diag_mask_inf,    [:ptr, :ptr, :int],       :ptr
+  ffi_func :tnn_concat,           [:ptr, :ptr, :ptr, :int], :ptr
+  ffi_func :tnn_null_ptr,         [],                       :ptr
   ffi_func :tnn_scale,            [:ptr, :ptr, :double],    :ptr
   ffi_func :tnn_softmax_back,     [:ptr, :ptr, :ptr],       :ptr
   ffi_func :tnn_get_rows,         [:ptr, :ptr, :ptr],       :ptr

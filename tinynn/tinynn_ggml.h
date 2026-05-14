@@ -65,6 +65,9 @@ void  *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps);
 void  *tnn_softmax(void *sess, void *a);                /* per-row softmax along ne[0] */
 void  *tnn_diag_mask_inf(void *sess, void *a, int n_past);
                                                          /* set elements above the diagonal (off by n_past) to -inf */
+void  *tnn_concat(void *sess, void *a, void *b, int dim);
+                                                         /* concat a and b along the given ne axis */
+void  *tnn_null_ptr(void);                              /* :ptr-typed NULL seed for Spinel PtrArray inference */
 void  *tnn_transpose(void *sess, void *a);              /* materialised transpose: (rows,cols) → (cols,rows) */
 void  *tnn_scale(void *sess, void *a, double s);        /* element-wise a * s */
 

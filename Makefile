@@ -178,6 +178,14 @@ ab-smoke-full-forward-skeleton: tinynn/ab_smoke_full_forward_skeleton
 tinynn/ab_smoke_full_forward_skeleton: tinynn/ab_smoke_full_forward_skeleton.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_full_forward_skeleton.rb -o tinynn/ab_smoke_full_forward_skeleton
 
+# M1.2: full single-block forward through the persistent graph.
+# Parity vs native TransformerLM.forward() at n_layers=1, n_heads=2.
+ab-smoke-full-forward-block: tinynn/ab_smoke_full_forward_block
+	./tinynn/ab_smoke_full_forward_block
+
+tinynn/ab_smoke_full_forward_block: tinynn/ab_smoke_full_forward_block.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_full_forward_block.rb -o tinynn/ab_smoke_full_forward_block
+
 ab-smoke-dual-graph-cuda: tinynn/ab_smoke_dual_graph_cuda
 	./tinynn/ab_smoke_dual_graph_cuda
 
