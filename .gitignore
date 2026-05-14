@@ -41,6 +41,9 @@ tinynn/ab_smoke_all_cuda
 tinynn/ab_smoke_ffncache
 tinynn/ab_smoke_adamw_op
 tinynn/ab_smoke_adamw_op_cuda
+tinynn/ab_smoke_persistent
+tinynn/ab_smoke_dual_graph
+tinynn/ab_smoke_dual_graph_cuda
 
 # Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
 vendor/

@@ -169,6 +169,12 @@ ab-smoke-dual-graph: tinynn/ab_smoke_dual_graph
 tinynn/ab_smoke_dual_graph: tinynn/ab_smoke_dual_graph.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_dual_graph.rb -o tinynn/ab_smoke_dual_graph
 
+ab-smoke-dual-graph-cuda: tinynn/ab_smoke_dual_graph_cuda
+	./tinynn/ab_smoke_dual_graph_cuda
+
+tinynn/ab_smoke_dual_graph_cuda: tinynn/ab_smoke_dual_graph_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+	$(SPINEL) tinynn/ab_smoke_dual_graph_cuda.rb -o tinynn/ab_smoke_dual_graph_cuda
+
 ab-smoke-adamw-op-cuda: tinynn/ab_smoke_adamw_op_cuda
 	./tinynn/ab_smoke_adamw_op_cuda
 
