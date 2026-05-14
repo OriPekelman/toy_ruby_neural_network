@@ -340,7 +340,11 @@ module TinyNN
   # spinel wrapper adds -lm *before* FFI libs; ggml-cpu needs it again.
   ffi_lib "m"
 
-  ffi_cflags "-L. -Ltinynn -Lvendor/ggml/build/src -Lvendor/ggml/build/src/ggml-cpu"
+  # `-Wno-int-conversion` keeps newer gccs (ubuntu noble, Ruby 3.4
+  # container, etc.) from upgrading `Array<:ptr>` -> IntArray cc
+  # warnings to errors. The pointer round-trips through mrb_int
+  # cleanly on 64-bit; filed upstream as matz/spinel#492.
+  ffi_cflags "-L. -Ltinynn -Lvendor/ggml/build/src -Lvendor/ggml/build/src/ggml-cpu -Wno-int-conversion"
 
   ffi_func :tnn_session_new,      [:int],                   :ptr
   ffi_func :tnn_session_free,     [:ptr],                   :void

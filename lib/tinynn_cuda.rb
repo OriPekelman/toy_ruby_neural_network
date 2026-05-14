@@ -90,7 +90,7 @@ module TinyNNCuda
   ffi_lib "rt"
   ffi_lib "dl"
 
-  ffi_cflags "-L. -Ltinynn -Lvendor/ggml/build-cuda/src -Lvendor/ggml/build-cuda/src/ggml-cpu -Lvendor/ggml/build-cuda/src/ggml-cuda -L/usr/local/cuda/lib64"
+  ffi_cflags "-L. -Ltinynn -Lvendor/ggml/build-cuda/src -Lvendor/ggml/build-cuda/src/ggml-cpu -Lvendor/ggml/build-cuda/src/ggml-cuda -L/usr/local/cuda/lib64 -Wno-int-conversion"
 
   ffi_func :tnn_session_new,      [:int],                   :ptr
   ffi_func :tnn_session_free,     [:ptr],                   :void

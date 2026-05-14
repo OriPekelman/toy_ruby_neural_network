@@ -57,3 +57,7 @@ tinynn/full_forward_bench_cuda
 inference_demo
 inference_demo_cuda
 tinynn/ab_smoke_kv_write
+tep_demo/hello
+tep_demo/api
+tep_demo/.*.tep.rb
+tep_demo/_tep_lib/

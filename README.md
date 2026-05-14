@@ -135,16 +135,24 @@ Educational, with optional acceleration for real-LM-scale work.
 - Generations look plausibly TinyStories-shaped:
   *"once upon a time there was a little boy named tim he loved to
   play in the park with his best friends…"*
-- FFI bridge: 19 ggml ops + chained FFN graph + `FullForwardFFICache`
+- FFI bridge: 22 ggml ops + chained FFN graph + `FullForwardFFICache`
   (entire model forward as one persistent graph) + ggml-native AdamW
-  verified on both CPU and CUDA. At "more than toy" shape
-  (vocab=4096, d_model=384, n_heads=6, n_layers=6, T=128) the full
-  forward runs **38× faster on CPU FFI** (1180 ms → 31 ms/iter) and
-  **34× faster on CUDA FFI**. End-to-end inference works:
-  `./inference_demo` generates greedy-sampled tokens via the FFI
-  graph, parity-checked against native forward. Full performance
-  story and the path to fully-on-GPU training in
-  [tinynn/README.md](tinynn/README.md).
+  + KV-cache primitives (view + cpy) + LayerNorm verified on both CPU
+  and CUDA. At "more than toy" shape (vocab=4096, d_model=384, n_heads=6,
+  n_layers=6, T=128) the full forward runs **38× faster on CPU FFI**
+  (1180 ms → 31 ms/iter) and **34× faster on CUDA FFI**. End-to-end
+  inference works: `./inference_demo` generates greedy-sampled tokens
+  via the FFI graph, parity-checked against native forward.
+- HTTP API POC: `tep_demo/hello_api.rb` + `make tep_demo/hello` builds
+  a single-binary HTTP server (Tep + Spinel) that does **~22k req/s**
+  at 4-thread concurrency. The inference variant
+  (`tep_demo/inference_api.rb`) is currently blocked on a Spinel
+  polymorphic-dispatch issue (Mat#add vs Tep::Router#add collision);
+  see `tep_demo/README.md` for the workarounds.
+- Full performance story and the path to fully-on-GPU training in
+  [tinynn/README.md](tinynn/README.md). HTTP-server numbers,
+  build details, and the inference-API blocker in
+  [tep_demo/README.md](tep_demo/README.md).
 
 Real LM training at this scale still wants careful hyperparameter
 sweeps; this is a hand-built toy.
