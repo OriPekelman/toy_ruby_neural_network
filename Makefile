@@ -153,6 +153,22 @@ ab-smoke-adamw-op: tinynn/ab_smoke_adamw_op
 tinynn/ab_smoke_adamw_op: tinynn/ab_smoke_adamw_op.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_adamw_op.rb -o tinynn/ab_smoke_adamw_op
 
+# Persistent-tensor architecture check: data uploaded to a ctx_w tensor
+# survives a compute cycle.
+ab-smoke-persistent: tinynn/ab_smoke_persistent
+	./tinynn/ab_smoke_persistent
+
+tinynn/ab_smoke_persistent: tinynn/ab_smoke_persistent.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_persistent.rb -o tinynn/ab_smoke_persistent
+
+# Dual-cgraph + persistent-weights design check: forward reads t_w;
+# adam mutates t_w in place; forward sees the new value.
+ab-smoke-dual-graph: tinynn/ab_smoke_dual_graph
+	./tinynn/ab_smoke_dual_graph
+
+tinynn/ab_smoke_dual_graph: tinynn/ab_smoke_dual_graph.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_dual_graph.rb -o tinynn/ab_smoke_dual_graph
+
 ab-smoke-adamw-op-cuda: tinynn/ab_smoke_adamw_op_cuda
 	./tinynn/ab_smoke_adamw_op_cuda
 

@@ -124,6 +124,13 @@ module TinyNNCuda
   ffi_func :tnn_set_output,       [:ptr],                   :void
   ffi_func :tnn_set_param,        [:ptr],                   :void
   ffi_func :tnn_input_1d_f32,     [:ptr, :int],             :ptr
+  ffi_func :tnn_input_2d_f32_persistent, [:ptr, :int, :int],   :ptr
+  ffi_func :tnn_input_1d_f32_persistent, [:ptr, :int],         :ptr
+  ffi_func :tnn_finalize_weights, [:ptr],                   :int
+  ffi_func :tnn_realize_b,        [:ptr, :ptr],             :int
+  ffi_func :tnn_switch_a,         [:ptr],                   :int
+  ffi_func :tnn_switch_b,         [:ptr],                   :int
+  ffi_func :tnn_compute_b,        [:ptr],                   :int
   ffi_func :tnn_opt_step_adamw,   [:ptr, :ptr, :ptr, :ptr, :ptr, :ptr], :ptr
   ffi_func :tnn_adam_step_scratch,[:ptr, :int, :double, :double, :double, :double, :double, :double], :void
   ffi_func :tnn_tensor_ne0,       [:ptr],                   :int

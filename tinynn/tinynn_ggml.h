@@ -28,6 +28,32 @@ int    tnn_link_check(void);                 /* returns 73 */
 /* Build phase: declare tensors and ops, then realize.
  * Tensors are created before tnn_realize; backend storage is allocated then. */
 void  *tnn_input_2d_f32(void *sess, int rows, int cols);
+
+/* Persistent F32 inputs. Created in ctx_w; backend buffer allocated by
+ * tnn_finalize_weights. Data uploaded to these tensors survives across
+ * sched_reset cycles — use for parameters, optimizer moments, anything
+ * that should live on the device between training steps. */
+void  *tnn_input_2d_f32_persistent(void *sess, int rows, int cols);
+void  *tnn_input_1d_f32_persistent(void *sess, int n);
+
+/* Allocate the backend buffer for all persistent tensors. Call once,
+ * after declaring persistent tensors and before any tnn_realize. */
+int    tnn_finalize_weights(void *sess);
+
+/* Build a SECONDARY graph (graph_b) sharing the session's ctx and
+ * tensors. Used for adam_step / update passes that mutate persistent
+ * weights between forward calls. Does NOT alloc -- call tnn_switch_b
+ * before tnn_compute_b each iteration. */
+int    tnn_realize_b(void *sess, void *result);
+
+/* Reset sched and alloc the requested graph for the next compute.
+ * Persistent tensors keep their stable buffer; compute tensors get
+ * fresh slots (caller must re-upload compute inputs after switch). */
+int    tnn_switch_a(void *sess);
+int    tnn_switch_b(void *sess);
+
+/* Compute the secondary graph (graph_b). Must be preceded by tnn_switch_b. */
+int    tnn_compute_b(void *sess);
 void  *tnn_matmul(void *sess, void *a, void *b);        /* A * B^T (ggml-native) */
 void  *tnn_matmul_axb(void *sess, void *a, void *b);    /* A * B  (transposes B internally) */
 void  *tnn_add(void *sess, void *a, void *b);           /* element-wise A + B (same shape) */

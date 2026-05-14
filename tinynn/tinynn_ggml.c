@@ -63,15 +63,34 @@ static tnn_engine *tnn_engine_get(int prefer_cuda)
 
 /* Session: per "compute frame" — owns its ctx + graph + scratch, but
  * references a cached engine. tnn_session_free frees the per-frame
- * resources only; the engine persists for reuse. */
+ * resources only; the engine persists for reuse.
+ *
+ * Two contexts:
+ *  - ctx_w (weights_ctx): persistent tensors (parameters, moments).
+ *    Allocated once via ggml_backend_alloc_ctx_tensors into a stable
+ *    backend buffer that survives sched_reset cycles.
+ *  - ctx (compute_ctx): per-step tensors (inputs, intermediates).
+ *    Managed by backend_sched, re-allocated per compute cycle.
+ *
+ * Cross-ctx tensors in a single graph are supported by ggml — nodes
+ * just hold tensor pointers. The compute graph references both ctxs;
+ * sched skips persistent tensors (they already have a buffer). */
 typedef struct {
-    tnn_engine          *engine;         /* unowned */
-    struct ggml_context *ctx;            /* metadata only, no_alloc=true */
-    struct ggml_cgraph  *graph;
-    uint8_t             *ctx_buf;
-    size_t               ctx_buf_size;
-    float               *scratch;
-    int                  realized;
+    tnn_engine             *engine;       /* unowned */
+    struct ggml_context    *ctx;          /* compute (no_alloc=true) */
+    struct ggml_context    *ctx_w;        /* weights  (no_alloc=true until finalized) */
+    struct ggml_cgraph     *graph;        /* primary (e.g. forward) */
+    struct ggml_cgraph     *graph_b;      /* secondary (e.g. adam_step) */
+    uint8_t                *ctx_buf;
+    size_t                  ctx_buf_size;
+    uint8_t                *ctx_w_buf;
+    size_t                  ctx_w_buf_size;
+    ggml_backend_buffer_t   weights_buf;  /* set by tnn_finalize_weights */
+    float                  *scratch;
+    int                     realized;
+    int                     realized_b;
+    int                     weights_finalized;
+    int                     last_graph;   /* 0 = none, 1 = a, 2 = b */
 } tnn_session;
 
 void *tnn_session_new(int prefer_cuda)
@@ -87,8 +106,9 @@ void *tnn_session_new(int prefer_cuda)
      * wiped before this session builds its graph. */
     ggml_backend_sched_reset(e->sched);
 
-    s->ctx_buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE
-                      + ggml_graph_overhead();
+    /* Two cgraphs share ctx, so reserve room for both. */
+    s->ctx_buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE * 2
+                      + ggml_graph_overhead() * 2;
     s->ctx_buf = (uint8_t *)calloc(1, s->ctx_buf_size);
     struct ggml_init_params params = {
         /*.mem_size   =*/ s->ctx_buf_size,
@@ -96,10 +116,26 @@ void *tnn_session_new(int prefer_cuda)
         /*.no_alloc   =*/ true,
     };
     s->ctx = ggml_init(params);
-    s->graph = ggml_new_graph(s->ctx);
+    s->graph   = ggml_new_graph(s->ctx);
+    s->graph_b = ggml_new_graph(s->ctx);
+
+    /* Smaller weights ctx: just enough room for the param tensors'
+     * metadata. Sized for ~64 weight tensors per FFNFFICache. */
+    s->ctx_w_buf_size = ggml_tensor_overhead() * 64;
+    s->ctx_w_buf = (uint8_t *)calloc(1, s->ctx_w_buf_size);
+    struct ggml_init_params w_params = {
+        /*.mem_size   =*/ s->ctx_w_buf_size,
+        /*.mem_buffer =*/ s->ctx_w_buf,
+        /*.no_alloc   =*/ true,
+    };
+    s->ctx_w = ggml_init(w_params);
 
     s->scratch = (float *)calloc(1, TNN_SCRATCH_BYTES);
-    s->realized = 0;
+    s->realized          = 0;
+    s->realized_b        = 0;
+    s->weights_finalized = 0;
+    s->weights_buf       = NULL;
+    s->last_graph        = 0;
     return (void *)s;
 }
 
@@ -107,8 +143,11 @@ void tnn_session_free(void *sess)
 {
     if (!sess) return;
     tnn_session *s = (tnn_session *)sess;
-    if (s->ctx) ggml_free(s->ctx);
+    if (s->weights_buf) ggml_backend_buffer_free(s->weights_buf);
+    if (s->ctx)   ggml_free(s->ctx);
+    if (s->ctx_w) ggml_free(s->ctx_w);
     free(s->ctx_buf);
+    free(s->ctx_w_buf);
     free(s->scratch);
     free(s);
     /* Engine + sched are cached globally; do not free here. */
@@ -129,6 +168,45 @@ void *tnn_input_2d_f32(void *sess, int rows, int cols)
     (void)s;   /* future: validate ctx hasn't been realized */
     return (void *)ggml_new_tensor_2d(((tnn_session *)sess)->ctx, GGML_TYPE_F32,
                                        (int64_t)cols, (int64_t)rows);
+}
+
+/* Create a PERSISTENT 2D F32 tensor in ctx_w. Its backend buffer is
+ * allocated by tnn_finalize_weights (call once after all persistent
+ * tensors are declared) and retained across sched_reset cycles, so
+ * uploaded data survives multiple compute calls without re-upload. */
+void *tnn_input_2d_f32_persistent(void *sess, int rows, int cols)
+{
+    if (!sess || rows <= 0 || cols <= 0) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    if (s->weights_finalized) return NULL;
+    return (void *)ggml_new_tensor_2d(s->ctx_w, GGML_TYPE_F32,
+                                       (int64_t)cols, (int64_t)rows);
+}
+
+/* Same as above but 1D — used for the 7-elem adamw_params vector. */
+void *tnn_input_1d_f32_persistent(void *sess, int n)
+{
+    if (!sess || n <= 0) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    if (s->weights_finalized) return NULL;
+    return (void *)ggml_new_tensor_1d(s->ctx_w, GGML_TYPE_F32, (int64_t)n);
+}
+
+/* Allocate the backend buffer for all persistent tensors in ctx_w.
+ * Must be called AFTER declaring all persistent tensors and BEFORE
+ * any tnn_realize/compute. After this, the persistent tensors have
+ * stable backend storage independent of sched.
+ *
+ * Returns 0 on success, negative on failure. */
+int tnn_finalize_weights(void *sess)
+{
+    if (!sess) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    if (s->weights_finalized) return -2;
+    s->weights_buf = ggml_backend_alloc_ctx_tensors(s->ctx_w, s->engine->backend);
+    if (!s->weights_buf) return -3;
+    s->weights_finalized = 1;
+    return 0;
 }
 
 void *tnn_matmul(void *sess, void *a, void *b)
@@ -358,7 +436,8 @@ int tnn_realize(void *sess, void *result)
     ggml_build_forward_expand(s->graph, (struct ggml_tensor *)result);
     ggml_backend_sched_reset(s->engine->sched);
     if (!ggml_backend_sched_alloc_graph(s->engine->sched, s->graph)) return -3;
-    s->realized = 1;
+    s->realized   = 1;
+    s->last_graph = 1;
     return 0;
 }
 
@@ -368,6 +447,56 @@ int tnn_compute(void *sess)
     tnn_session *s = (tnn_session *)sess;
     if (!s->realized) return -2;
     enum ggml_status rc = ggml_backend_sched_graph_compute(s->engine->sched, s->graph);
+    return (rc == GGML_STATUS_SUCCESS) ? 0 : (int)rc;
+}
+
+/* Build a SECONDARY graph (graph_b) in the same session, sharing ctx
+ * and tensors with the primary. Does NOT alloc — call tnn_switch_b
+ * before tnn_compute_b each cycle. */
+int tnn_realize_b(void *sess, void *result)
+{
+    if (!sess || !result) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    if (s->realized_b) return -2;
+    ggml_build_forward_expand(s->graph_b, (struct ggml_tensor *)result);
+    s->realized_b = 1;
+    return 0;
+}
+
+/* Switch sched allocation to graph_b (or back to graph). Resets the
+ * scheduler then allocates buffer slots for the requested graph's
+ * compute tensors. Persistent tensors (allocated via ctx_w) keep
+ * their stable buffer locations. Compute tensors (h, intermediates)
+ * get fresh slots that may differ from prior cycles -- caller MUST
+ * re-upload any compute inputs before tnn_compute*. */
+int tnn_switch_b(void *sess)
+{
+    if (!sess) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    if (!s->realized_b) return -2;
+    ggml_backend_sched_reset(s->engine->sched);
+    if (!ggml_backend_sched_alloc_graph(s->engine->sched, s->graph_b)) return -3;
+    s->last_graph = 2;
+    return 0;
+}
+
+int tnn_switch_a(void *sess)
+{
+    if (!sess) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    if (!s->realized) return -2;
+    ggml_backend_sched_reset(s->engine->sched);
+    if (!ggml_backend_sched_alloc_graph(s->engine->sched, s->graph)) return -3;
+    s->last_graph = 1;
+    return 0;
+}
+
+int tnn_compute_b(void *sess)
+{
+    if (!sess) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    if (!s->realized_b) return -2;
+    enum ggml_status rc = ggml_backend_sched_graph_compute(s->engine->sched, s->graph_b);
     return (rc == GGML_STATUS_SUCCESS) ? 0 : (int)rc;
 }
 
