@@ -69,3 +69,6 @@ distilgpt2_demo
 tinynn/gguf_inspect
 tinynn/gpt2_build_smoke
 tinynn/gpt2_load_smoke
+tinynn/gpt2_parity
+data/ours_logits.txt
+data/ref_logits.txt

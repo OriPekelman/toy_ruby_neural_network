@@ -328,6 +328,14 @@ tinynn/gpt2_load_smoke: tinynn/gpt2_load_smoke.rb lib/transformer.rb lib/gpt2.rb
 distilgpt2_demo: distilgpt2_demo.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
+# Parity probe: one forward at distilgpt2 shape, dump last-row logits
+# to data/ours_logits.txt. Pair with prep/parity.py for the HF reference.
+gpt2-parity: tinynn/gpt2_parity
+	./tinynn/gpt2_parity
+
+tinynn/gpt2_parity: tinynn/gpt2_parity.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/gpt2_parity.rb -o tinynn/gpt2_parity
+
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed
 
