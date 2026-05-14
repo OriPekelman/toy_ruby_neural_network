@@ -95,6 +95,17 @@ int    tnn_scratch_get_i32(void *sess, int idx);
 int    tnn_upload(void *sess, void *tensor);
 int    tnn_download(void *sess, void *tensor);
 
+/* Bulk f64 → tensor upload using Spinel's :float_array spec (matz/spinel#474).
+ * `data` is a `const double *` straight from an Array<Float>'s storage; we
+ * convert to f32 and bulk-copy to the backend buffer in one go. Replaces
+ * the per-element tnn_scratch_set loop for row-major uploads. */
+int    tnn_upload_from_float_array(void *sess, void *tensor, const double *data, size_t n);
+
+/* Bulk i64 → tensor upload, for row-index tensors (embedding lookup).
+ * The :int_array spec gives us `const int64_t *`; we narrow to int32 (which
+ * is what ggml's GGML_TYPE_I32 expects) during the copy. */
+int    tnn_upload_from_int_array(void *sess, void *tensor, const long *data, size_t n);
+
 int    tnn_tensor_ne0(void *t);
 int    tnn_tensor_ne1(void *t);
 size_t tnn_tensor_nbytes(void *t);

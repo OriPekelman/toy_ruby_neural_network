@@ -71,6 +71,10 @@ module TinyNN
   ffi_func :tnn_scratch_get,      [:ptr, :int],             :double
   ffi_func :tnn_upload,           [:ptr, :ptr],             :int
   ffi_func :tnn_download,         [:ptr, :ptr],             :int
+  # Zero-copy bulk upload via Spinel's :float_array / :int_array specs
+  # (matz/spinel#474). Replaces the per-element tnn_scratch_set loops.
+  ffi_func :tnn_upload_from_float_array, [:ptr, :ptr, :float_array, :size_t], :int
+  ffi_func :tnn_upload_from_int_array,   [:ptr, :ptr, :int_array,   :size_t], :int
   ffi_func :tnn_tensor_ne0,       [:ptr],                   :int
   ffi_func :tnn_tensor_ne1,       [:ptr],                   :int
 
@@ -392,14 +396,12 @@ module TinyNN
   # Stage a Mat row-major into scratch and upload to `tensor`. Use for
   # elementwise inputs or for matmul's A operand. For matmul's B we
   # also have upload_transposed below.
+  #
+  # Uses Spinel's :float_array spec (matz/spinel#474) for zero-copy
+  # transfer of mat.flat — single FFI call replaces O(n) per-element
+  # tnn_scratch_set loop.
   def self.upload_row_major(sess, tensor, mat)
-    n = mat.nrows * mat.ncols
-    i = 0
-    while i < n
-      TinyNN.tnn_scratch_set(sess, i, mat.flat[i])
-      i = i + 1
-    end
-    TinyNN.tnn_upload(sess, tensor)
+    TinyNN.tnn_upload_from_float_array(sess, tensor, mat.flat, mat.nrows * mat.ncols)
   end
 
   # Stage a Mat TRANSPOSED into scratch and upload. Use this for the

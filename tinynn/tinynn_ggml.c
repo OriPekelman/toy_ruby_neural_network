@@ -396,6 +396,40 @@ int tnn_download(void *sess, void *tensor)
     return 0;
 }
 
+int tnn_upload_from_float_array(void *sess, void *tensor, const double *data, size_t n)
+{
+    if (!sess || !tensor || !data) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    struct ggml_tensor *t = (struct ggml_tensor *)tensor;
+    size_t max_n = TNN_SCRATCH_BYTES / sizeof(float);
+    if (n > max_n) return -2;
+
+    /* f64 → f32 conversion into scratch. The data pointer aliases the
+     * caller's Array<Float> storage; we don't write through it, only read. */
+    for (size_t i = 0; i < n; ++i) s->scratch[i] = (float)data[i];
+
+    ggml_backend_tensor_set(t, s->scratch, 0, n * sizeof(float));
+    return 0;
+}
+
+int tnn_upload_from_int_array(void *sess, void *tensor, const long *data, size_t n)
+{
+    if (!sess || !tensor || !data) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    struct ggml_tensor *t = (struct ggml_tensor *)tensor;
+    size_t max_n = TNN_SCRATCH_BYTES / sizeof(int32_t);
+    if (n > max_n) return -2;
+
+    int32_t *dst = (int32_t *)s->scratch;
+    /* i64 → i32 narrowing. Spinel's :int_array is `const int64_t *`; ggml's
+     * GGML_TYPE_I32 row-index tensors are 32-bit. Caller responsibility
+     * not to pass out-of-range indices (vocab fits easily in int32). */
+    for (size_t i = 0; i < n; ++i) dst[i] = (int32_t)data[i];
+
+    ggml_backend_tensor_set(t, dst, 0, n * sizeof(int32_t));
+    return 0;
+}
+
 int tnn_tensor_ne0(void *t) { return t ? (int)((struct ggml_tensor *)t)->ne[0] : 0; }
 int tnn_tensor_ne1(void *t) { return t ? (int)((struct ggml_tensor *)t)->ne[1] : 0; }
 size_t tnn_tensor_nbytes(void *t) { return t ? ggml_nbytes((struct ggml_tensor *)t) : 0; }
