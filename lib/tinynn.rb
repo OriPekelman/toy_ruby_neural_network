@@ -768,8 +768,14 @@ module TinyNN
 
   # Download a tensor whose data is row-major (output of elementwise
   # ops like add, gelu, rms_norm, softmax, scale).
-  def self.download_row_major(sess, tensor, rows, cols)
-    TinyNN.tnn_download(sess, tensor)
+  #
+  # Param name `dl_handle` (not `tensor`) intentionally — Spinel
+  # unifies param-name types across the whole program, and `tensor`
+  # collides with a dead `upload_transposed` definition whose param
+  # got mistyped as mrb_int. Result: download_row_major's tensor arg
+  # gets boxed at call sites and the (void *) cast inside fails.
+  def self.download_row_major(sess, dl_handle, rows, cols)
+    TinyNN.tnn_download(sess, dl_handle)
     out = Mat.new(rows, cols)
     n = rows * cols
     i = 0

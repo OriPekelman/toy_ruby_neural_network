@@ -332,6 +332,10 @@ distilgpt2_demo: distilgpt2_demo.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load
 distilgpt2_demo_ffi: distilgpt2_demo_ffi.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
+# KV-cache variant: per-step decode (constant in prompt length).
+distilgpt2_demo_kv: distilgpt2_demo_kv.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi_kv.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
 # Parity probe: one forward at distilgpt2 shape, dump last-row logits
 # to data/ours_logits.txt. Pair with prep/parity.py for the HF reference.
 gpt2-parity: tinynn/gpt2_parity
@@ -353,8 +357,16 @@ tinynn/gpt2_ffi_parity: tinynn/gpt2_ffi_parity.rb lib/transformer.rb lib/gpt2.rb
 gpt2-bench: tinynn/gpt2_bench
 	./tinynn/gpt2_bench
 
-tinynn/gpt2_bench: tinynn/gpt2_bench.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+tinynn/gpt2_bench: tinynn/gpt2_bench.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi.rb lib/gpt2_ffi_kv.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/gpt2_bench.rb -o tinynn/gpt2_bench
+
+# KV-cache parity probe: prefill the prompt one token at a time through
+# GPT2KVFFICache, dump last-position logits.
+gpt2-kv-parity: tinynn/gpt2_kv_parity
+	./tinynn/gpt2_kv_parity
+
+tinynn/gpt2_kv_parity: tinynn/gpt2_kv_parity.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi_kv.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/gpt2_kv_parity.rb -o tinynn/gpt2_kv_parity
 
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed

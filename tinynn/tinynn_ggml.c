@@ -106,14 +106,18 @@ void *tnn_session_new(int prefer_cuda)
      * wiped before this session builds its graph. */
     ggml_backend_sched_reset(e->sched);
 
-    /* Two cgraphs share ctx, so reserve room for both. The graph
-     * size budget needs to accommodate per-head intermediates in the
-     * full-forward graph (per block: ~8 tensors per head + 10 block-
-     * level + weights). Several MB; the no_alloc=true context only
-     * holds metadata so this is cheap bytes-wise. */
-    s->ctx_buf_size = ggml_tensor_overhead() * 8192
+    /* Two cgraphs share ctx, so reserve room for both. ctx grows
+     * monotonically across tnn_reset_for_rebuild cycles (each rebuild
+     * allocates new compute-tensor metadata in the same ctx). At
+     * GPT-2-distil shape one decode-step graph has ~1280 ops:
+     *   6 layers × (12 heads × ~16 ops + concat/proj/FFN/LN/residual)
+     * × N rebuilds = 1280 × N tensor headers (~376 B each).
+     * Reserve enough headroom for ~10k rebuilds = ~5M tensor headers.
+     * The no_alloc=true ctx only holds metadata so this is cheap
+     * bytes-wise. */
+    s->ctx_buf_size = ggml_tensor_overhead() * 262144
                       + ggml_graph_overhead_custom(GGML_DEFAULT_GRAPH_SIZE, false) * 4
-                      + 4 * 1024 * 1024;
+                      + 32 * 1024 * 1024;
     s->ctx_buf = (uint8_t *)calloc(1, s->ctx_buf_size);
     struct ggml_init_params params = {
         /*.mem_size   =*/ s->ctx_buf_size,

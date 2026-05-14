@@ -77,3 +77,6 @@ data/ours_ffi_logits.txt
 distilgpt2_demo_ffi
 tinynn/gpt2_bench
 tinynn/kv_multi_cpy_smoke
+tinynn/gpt2_kv_parity
+data/ours_kv_logits.txt
+distilgpt2_demo_kv

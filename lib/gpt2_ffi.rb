@@ -269,28 +269,28 @@ module GPT2FFI
   # GPT2FullForwardFFICache. Transposed-upload for the per-head Q/K/V
   # and for w_o/w_ff1/w_ff2; row-major bulk for token_embed/pos_slice;
   # direct 1-D upload for biases and LayerNorm params.
-  def self.upload_from(cache, model, pos_slice_mat)
-    sess = cache.sess
-    n    = cache.n_layers
-    n_heads = cache.n_heads
-    d_model = cache.d_model
+  def self.upload_from(fwd_cache, model, pos_slice_mat)
+    sess = fwd_cache.sess
+    n    = fwd_cache.n_layers
+    n_heads = fwd_cache.n_heads
+    d_model = fwd_cache.d_model
 
-    TinyNN.upload_row_major(sess, cache.t_token_embed, model.token_embed)
-    TinyNN.upload_row_major(sess, cache.t_pos_slice,   pos_slice_mat)
-    TinyNN.tnn_upload_from_float_array(sess, cache.t_ln_f_gamma, model.ln_f_gamma, d_model)
-    TinyNN.tnn_upload_from_float_array(sess, cache.t_ln_f_beta,  model.ln_f_beta,  d_model)
+    TinyNN.upload_row_major(sess, fwd_cache.t_token_embed, model.token_embed)
+    TinyNN.upload_row_major(sess, fwd_cache.t_pos_slice,   pos_slice_mat)
+    TinyNN.tnn_upload_from_float_array(sess, fwd_cache.t_ln_f_gamma, model.ln_f_gamma, d_model)
+    TinyNN.tnn_upload_from_float_array(sess, fwd_cache.t_ln_f_beta,  model.ln_f_beta,  d_model)
 
     li = 0
     while li < n
       blk_n = model.gpt2_blocks[li]
-      blk_f = cache.gpt2_blocks_ffi[li]
+      blk_f = fwd_cache.gpt2_blocks_ffi[li]
 
       TinyNN.tnn_upload_from_float_array(sess, blk_f.t_ln1_gamma, blk_n.ln1_gamma, d_model)
       TinyNN.tnn_upload_from_float_array(sess, blk_f.t_ln1_beta,  blk_n.ln1_beta,  d_model)
       TinyNN.tnn_upload_from_float_array(sess, blk_f.t_ln2_gamma, blk_n.ln2_gamma, d_model)
       TinyNN.tnn_upload_from_float_array(sess, blk_f.t_ln2_beta,  blk_n.ln2_beta,  d_model)
 
-      d_head = cache.d_head
+      d_head = fwd_cache.d_head
       h = 0
       while h < n_heads
         TinyNN.stage_transposed_and_upload(sess, blk_f.t_w_q[h], blk_n.w_q[h])
@@ -306,7 +306,7 @@ module GPT2FFI
       TinyNN.stage_transposed_and_upload(sess, blk_f.t_w_ff1, blk_n.w_ff1)
       TinyNN.stage_transposed_and_upload(sess, blk_f.t_w_ff2, blk_n.w_ff2)
       TinyNN.tnn_upload_from_float_array(sess, blk_f.t_b_o,   blk_n.b_o,   d_model)
-      TinyNN.tnn_upload_from_float_array(sess, blk_f.t_b_ff1, blk_n.b_ff1, cache.d_ff)
+      TinyNN.tnn_upload_from_float_array(sess, blk_f.t_b_ff1, blk_n.b_ff1, fwd_cache.d_ff)
       TinyNN.tnn_upload_from_float_array(sess, blk_f.t_b_ff2, blk_n.b_ff2, d_model)
 
       li = li + 1
@@ -346,27 +346,13 @@ module GPT2FFI
   # Returns the (t_seq, vocab) logits Mat. ggml's mul_mat result has
   # ne=[vocab, t_seq] which, interpreted row-major with rows=t_seq /
   # cols=vocab, is the layout Mat#flat[t*vocab + v] expects.
-  def self.forward(cache, token_ids)
-    TinyNN.upload_int_array(cache.sess, cache.t_token_ids, token_ids)
-    rc = TinyNN.tnn_compute(cache.sess)
+  def self.forward(fwd_cache, token_ids)
+    TinyNN.upload_int_array(fwd_cache.sess, fwd_cache.t_token_ids, token_ids)
+    rc = TinyNN.tnn_compute(fwd_cache.sess)
     if rc != 0
       puts "tnn_compute failed: rc=" + rc.to_s
     end
-    TinyNN.download_row_major(cache.sess, cache.t_logits, cache.t_seq, cache.vocab_size)
+    TinyNN.download_row_major(fwd_cache.sess, fwd_cache.t_logits, fwd_cache.t_seq, fwd_cache.vocab_size)
   end
 
-  # Same as forward but also peeks at an intermediate marked tensor.
-  # Useful for debugging where the zero/NaN appears.
-  def self.forward_debug(cache, token_ids)
-    TinyNN.upload_int_array(cache.sess, cache.t_token_ids, token_ids)
-    rc = TinyNN.tnn_compute(cache.sess)
-    puts "compute rc=" + rc.to_s
-    embed = TinyNN.download_row_major(cache.sess, cache.t_x_embed, cache.t_seq, cache.d_model)
-    puts "x_embed[0,0..3]: " + embed.flat[0].to_s + ", " + embed.flat[1].to_s +
-         ", " + embed.flat[2].to_s + ", " + embed.flat[3].to_s
-    xf = TinyNN.download_row_major(cache.sess, cache.t_x_final, cache.t_seq, cache.d_model)
-    puts "x_final[0,0..3]: " + xf.flat[0].to_s + ", " + xf.flat[1].to_s +
-         ", " + xf.flat[2].to_s + ", " + xf.flat[3].to_s
-    TinyNN.download_row_major(cache.sess, cache.t_logits, cache.t_seq, cache.vocab_size)
-  end
 end
