@@ -14,6 +14,38 @@
 # share a persistent session across the training step. For S2 *** a single
 # A/B smoke check *** one-shot is fine.
 
+# Persistent FFI cache for one transformer block's FFN. Holds two
+# realized ggml graphs (one per matmul) so the per-call cost drops
+# to upload + compute + download.
+#
+# Weights need to be uploaded each call because training mutates them
+# every SGD step. The win is amortising the ggml_init +
+# backend_sched_alloc_graph cost which would otherwise re-run per
+# matmul per layer per step.
+class FFNFFICache
+  attr_accessor :sess1, :t_h, :t_w1_t, :tc1,
+                :sess2, :t_hidden, :t_w2_t, :tc2,
+                :t_seq, :d_model, :d_ff
+
+  def initialize(t_seq, d_model, d_ff)
+    @t_seq   = t_seq
+    @d_model = d_model
+    @d_ff    = d_ff
+
+    @sess1  = TinyNN.tnn_session_new(0)
+    @t_h    = TinyNN.tnn_input_2d_f32(@sess1, t_seq, d_model)
+    @t_w1_t = TinyNN.tnn_input_2d_f32(@sess1, d_ff, d_model)
+    @tc1    = TinyNN.tnn_matmul(@sess1, @t_h, @t_w1_t)
+    TinyNN.tnn_realize(@sess1, @tc1)
+
+    @sess2    = TinyNN.tnn_session_new(0)
+    @t_hidden = TinyNN.tnn_input_2d_f32(@sess2, t_seq, d_ff)
+    @t_w2_t   = TinyNN.tnn_input_2d_f32(@sess2, d_model, d_ff)
+    @tc2      = TinyNN.tnn_matmul(@sess2, @t_hidden, @t_w2_t)
+    TinyNN.tnn_realize(@sess2, @tc2)
+  end
+end
+
 # Holder for adam_step's three return values. (Spinel doesn't reliably
 # handle tuple/array returns of mixed-shape Mats — same workaround as
 # lib/transformer.rb's NormResult/FFResult/etc.)
@@ -75,6 +107,7 @@ module TinyNN
   ffi_func :tnn_gguf_tensor_type,           [:ptr, :int],     :int
   ffi_func :tnn_gguf_tensor_nbytes,         [:ptr, :int],     :size_t
   ffi_func :tnn_gguf_read_f32_to_doubles,   [:ptr, :int, :float_array, :size_t], :int
+  ffi_func :tnn_gguf_tensor_is_quantized,   [:ptr, :int],     :int
   ffi_func :tnn_gguf_write_demo_file,       [:str],           :int
   ffi_func :tnn_scratch_set_i32,  [:ptr, :int, :int],       :void
   ffi_func :tnn_scratch_get_i32,  [:ptr, :int],             :int

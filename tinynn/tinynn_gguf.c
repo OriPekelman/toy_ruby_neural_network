@@ -92,12 +92,42 @@ int tnn_gguf_read_f32_to_doubles(void *handle, int i, double *out, size_t n)
     if (!name) return -3;
     struct ggml_tensor *t = ggml_get_tensor(s->ggml_ctx, name);
     if (!t || !t->data) return -4;
-    if (t->type != GGML_TYPE_F32) return -5;   /* TODO: dequantize quantized types */
     size_t available = ggml_nelements(t);
     if (n > available) n = available;
-    const float *src = (const float *)t->data;
-    for (size_t k = 0; k < n; ++k) out[k] = (double)src[k];
+
+    /* F32: direct copy. */
+    if (t->type == GGML_TYPE_F32) {
+        const float *src = (const float *)t->data;
+        for (size_t k = 0; k < n; ++k) out[k] = (double)src[k];
+        return 0;
+    }
+
+    /* Quantized (Q8_0, Q4_K, Q5_K, F16, BF16, …): dequantize through
+     * ggml's type_traits.to_float. Allocates a temporary f32 buffer
+     * sized to the tensor's full element count (read past `n` not
+     * supported per-block-aligned dequantization). */
+    const struct ggml_type_traits *traits = ggml_get_type_traits(t->type);
+    if (!traits || !traits->to_float) return -5;
+
+    /* to_float must dequantize whole blocks; we ask for `available`
+     * elements (the full tensor) and then only forward `n` of them. */
+    float *fbuf = (float *)malloc(available * sizeof(float));
+    if (!fbuf) return -6;
+    traits->to_float(t->data, fbuf, (int64_t)available);
+    for (size_t k = 0; k < n; ++k) out[k] = (double)fbuf[k];
+    free(fbuf);
     return 0;
+}
+
+/* Convenience: tell the caller whether a given tensor index needs
+ * dequantization (i.e. is not GGML_TYPE_F32). Useful for the Ruby
+ * side to print "loaded Q8_0 tensor X" type diagnostics. */
+int tnn_gguf_tensor_is_quantized(void *handle, int i)
+{
+    if (!handle) return 0;
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    enum ggml_type t = gguf_get_tensor_type(s->gguf_ctx, (int64_t)i);
+    return (t == GGML_TYPE_F32) ? 0 : 1;
 }
 
 int tnn_gguf_write_demo_file(const char *path)

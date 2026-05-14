@@ -26,7 +26,11 @@ size_t tnn_gguf_tensor_nbytes(void *handle, int i);
  * `n` is the number of elements (caller should query nbytes/elementsize).
  * Currently supports GGML_TYPE_F32 only — future: dequantize Q4/Q8/etc.
  */
+/* Read tensor data as doubles. Handles F32 directly and Q8_0 / Q4_K /
+ * Q5_K / Q6_K / F16 / BF16 / etc. via ggml's type_traits.to_float
+ * dequantization path. */
 int    tnn_gguf_read_f32_to_doubles(void *handle, int i, double *out, size_t n);
+int    tnn_gguf_tensor_is_quantized(void *handle, int i);
 
 /* Create a tiny GGUF file at `path` with one 2x3 f32 tensor named
  * "demo.tensor" containing [1.0, 2.0, ..., 6.0]. Useful for the
