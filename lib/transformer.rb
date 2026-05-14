@@ -26,6 +26,9 @@ USE_FFI_MATMUL = false
 # feed_forward_ffi's USE_FFI_MATMUL-gated branch does. With
 # USE_FFI_MATMUL=false the FFI methods are dead code that Spinel's
 # DCE drops, but the library libs still get linked.
+
+# tinynn is always required so FFNFFICache is defined (it lives in
+# lib/tinynn.rb). Set USE_FFI_MATMUL=true to enable FFI dispatch.
 require_relative "tinynn"
 
 # ============================================================================
@@ -661,9 +664,15 @@ class TransformerLM
     FFResult.new(out, FFCache.new(pre, hidden))
   end
 
-  # Persistent-session FFI variant of feed_forward. Re-uses the
-  # graphs in `ffi_cache` (lazy-realized on first call); per call
-  # we just upload h + w_ff1 + w_ff2, compute, download.
+  # Persistent-session FFI variant of feed_forward. Single ggml session
+  # runs the chain `mul_mat(w1_t, h) -> gelu -> mul_mat(w2_t, hidden)`
+  # in one dispatch; activations live in ggml memory between matmul1
+  # and matmul2 (no host round-trip for GeLU).
+  #
+  # Operand-order trick: with matmul1 = mul_mat(w1_t, h), the result's
+  # ne0 is d_ff -- which equals matmul2's k -- so the chain composes
+  # without an intermediate transpose. All three result tensors then
+  # read back as a straight row-major memcpy.
   def feed_forward_ffi(h, block, ffi_cache)
     t_seq = h.nrows
     d_model = h.ncols
@@ -673,29 +682,13 @@ class TransformerLM
       ffi_cache.realize_for(t_seq, d_model, d_ff)
     end
 
-    # Upload h (row-major) and w_ff1 (transposed) into session 1.
-    TinyNN.upload_row_major(ffi_cache.sess1, ffi_cache.t_h, h)
-    TinyNN.stage_transposed_and_upload(ffi_cache.sess1, ffi_cache.t_w1_t, block.w_ff1)
-    TinyNN.tnn_compute(ffi_cache.sess1)
-    pre = TinyNN.download_matmul(ffi_cache.sess1, ffi_cache.tc1, t_seq, d_ff)
-
-    # GeLU on the host (matches feed_forward's tanh approx).
-    hidden = Mat.new(pre.nrows, pre.ncols)
-    c = 0.7978845608028654
-    n = pre.nrows * pre.ncols
-    i = 0
-    while i < n
-      x = pre.flat[i]
-      u = c * (x + 0.044715 * x * x * x)
-      hidden.flat[i] = 0.5 * x * (1.0 + Math.tanh(u))
-      i += 1
-    end
-
-    # Upload hidden + w_ff2 (transposed) into session 2.
-    TinyNN.upload_row_major(ffi_cache.sess2, ffi_cache.t_hidden, hidden)
-    TinyNN.stage_transposed_and_upload(ffi_cache.sess2, ffi_cache.t_w2_t, block.w_ff2)
-    TinyNN.tnn_compute(ffi_cache.sess2)
-    out = TinyNN.download_matmul(ffi_cache.sess2, ffi_cache.tc2, t_seq, d_model)
+    TinyNN.upload_row_major(ffi_cache.sess, ffi_cache.t_h, h)
+    TinyNN.stage_transposed_and_upload(ffi_cache.sess, ffi_cache.t_w1_t, block.w_ff1)
+    TinyNN.stage_transposed_and_upload(ffi_cache.sess, ffi_cache.t_w2_t, block.w_ff2)
+    TinyNN.tnn_compute(ffi_cache.sess)
+    pre    = TinyNN.download_row_major(ffi_cache.sess, ffi_cache.t_pre,    t_seq, d_ff)
+    hidden = TinyNN.download_row_major(ffi_cache.sess, ffi_cache.t_hidden, t_seq, d_ff)
+    out    = TinyNN.download_row_major(ffi_cache.sess, ffi_cache.t_out,    t_seq, d_model)
 
     FFResult.new(out, FFCache.new(pre, hidden))
   end

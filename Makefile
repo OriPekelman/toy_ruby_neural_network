@@ -139,6 +139,13 @@ tinynn/ab_smoke_scale: tinynn/ab_smoke_scale.rb lib/transformer.rb lib/tinynn.rb
 tinynn/ab_smoke_pipeline: tinynn/ab_smoke_pipeline.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_pipeline.rb -o tinynn/ab_smoke_pipeline
 
+# Chained FFNFFICache parity: pre, hidden, out vs hand-rolled native.
+ab-smoke-ffncache: tinynn/ab_smoke_ffncache
+	./tinynn/ab_smoke_ffncache
+
+tinynn/ab_smoke_ffncache: tinynn/ab_smoke_ffncache.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/ab_smoke_ffncache.rb -o tinynn/ab_smoke_ffncache
+
 # Transformer-shape sized parity + wallclock comparison.
 ab-smoke-big: tinynn/ab_smoke_big
 	./tinynn/ab_smoke_big
@@ -211,7 +218,7 @@ tinynn/persistent_bench: tinynn/persistent_bench.rb lib/transformer.rb lib/tinyn
 persistent-bench-cuda: tinynn/persistent_bench_cuda
 	./tinynn/persistent_bench_cuda
 
-tinynn/persistent_bench_cuda: tinynn/persistent_bench_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+tinynn/persistent_bench_cuda: tinynn/persistent_bench_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/persistent_bench_cuda.rb -o tinynn/persistent_bench_cuda
 
 persistent-bench-big: tinynn/persistent_bench_big
@@ -231,21 +238,21 @@ tinynn/tinynn_ggml_cuda.o: tinynn/tinynn_ggml.c tinynn/tinynn_ggml.h
 tinynn/libtinynn_ggml_cuda.a: tinynn/tinynn_ggml_cuda.o
 	ar $(ARFLAGS) $@ $<
 
-tinynn/ab_smoke_cuda: tinynn/ab_smoke_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+tinynn/ab_smoke_cuda: tinynn/ab_smoke_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_cuda.rb -o tinynn/ab_smoke_cuda
 
 # Consolidated CUDA parity test: matmul + add + gelu + rms_norm + softmax + scale + ffn_pipeline.
 ab-smoke-all-cuda: tinynn/ab_smoke_all_cuda
 	./tinynn/ab_smoke_all_cuda
 
-tinynn/ab_smoke_all_cuda: tinynn/ab_smoke_all_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+tinynn/ab_smoke_all_cuda: tinynn/ab_smoke_all_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_all_cuda.rb -o tinynn/ab_smoke_all_cuda
 
 # Transformer-shape parity + wallclock bench on CUDA (GB10).
 ab-smoke-big-cuda: tinynn/ab_smoke_big_cuda
 	./tinynn/ab_smoke_big_cuda
 
-tinynn/ab_smoke_big_cuda: tinynn/ab_smoke_big_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+tinynn/ab_smoke_big_cuda: tinynn/ab_smoke_big_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_big_cuda.rb -o tinynn/ab_smoke_big_cuda
 
 # --- maintenance ------------------------------------------------------------

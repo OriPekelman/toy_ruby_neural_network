@@ -77,6 +77,12 @@ void   tnn_adam_step_scratch(void *sess, int n,
  * called once after all ops are declared and before any upload. */
 int    tnn_realize(void *sess, void *result);
 
+/* Mark a tensor as a graph output so the backend scheduler keeps its
+ * buffer alive after compute (otherwise intermediate buffers may be
+ * reused as scratch by later ops, in particular ggml_gelu can reuse
+ * its input tensor's allocation). Call BEFORE tnn_realize. */
+void   tnn_set_output(void *tensor);
+
 /* Compute the (already-built) graph. Must be called after upload. */
 int    tnn_compute(void *sess);
 

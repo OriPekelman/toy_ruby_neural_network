@@ -14,20 +14,22 @@
 # share a persistent session across the training step. For S2 *** a single
 # A/B smoke check *** one-shot is fine.
 
-# Persistent FFI cache for one transformer block's FFN. Holds two
-# realized ggml graphs (one per matmul) so the per-call cost drops
-# from "create + realize + upload + compute + download + free" to
-# just "upload + compute + download".
+# Persistent FFI cache for one transformer block's FFN. Single ggml
+# session holding the full chain `matmul -> gelu -> matmul`. Activations
+# stay inside ggml between the two matmuls; only the three outputs
+# (pre, hidden, out) are downloaded at the end.
 #
 # Lazy-realized: T (sequence length) isn't known until the first
-# forward call. realize_for(t_seq, d_model, d_ff) sets up the graphs;
-# subsequent calls with the same T reuse them.
+# forward call. realize_for(t_seq, d_model, d_ff) sets up the graph;
+# subsequent calls with the same T reuse it.
 #
-# Weights re-upload each call (training mutates them); the win is
-# amortising ggml_init + backend_sched_alloc_graph across many steps.
+# Operand layout: we feed matmul1 as `matmul(t_w1_t, t_h)` so its
+# result has ne0=d_ff -- which is the k-dim of matmul2 -- so the
+# chain doesn't need an intermediate transpose. Downloads of all
+# three result tensors are then a straight row-major memcpy.
 class FFNFFICache
-  attr_accessor :sess1, :t_h, :t_w1_t, :tc1,
-                :sess2, :t_hidden, :t_w2_t, :tc2,
+  attr_accessor :sess, :t_h, :t_w1_t, :t_w2_t,
+                :t_pre, :t_hidden, :t_out,
                 :t_seq, :d_model, :d_ff, :realized
 
   def initialize
@@ -35,14 +37,13 @@ class FFNFFICache
     @t_seq    = 0
     @d_model  = 0
     @d_ff     = 0
-    @sess1    = nil
+    @sess     = nil
     @t_h      = nil
     @t_w1_t   = nil
-    @tc1      = nil
-    @sess2    = nil
-    @t_hidden = nil
     @t_w2_t   = nil
-    @tc2      = nil
+    @t_pre    = nil
+    @t_hidden = nil
+    @t_out    = nil
   end
 
   def realize_for(t_seq, d_model, d_ff)
@@ -50,17 +51,25 @@ class FFNFFICache
     @d_model = d_model
     @d_ff    = d_ff
 
-    @sess1  = TinyNN.tnn_session_new(0)
-    @t_h    = TinyNN.tnn_input_2d_f32(@sess1, t_seq, d_model)
-    @t_w1_t = TinyNN.tnn_input_2d_f32(@sess1, d_ff, d_model)
-    @tc1    = TinyNN.tnn_matmul(@sess1, @t_h, @t_w1_t)
-    TinyNN.tnn_realize(@sess1, @tc1)
+    @sess = TinyNN.tnn_session_new(0)
+    # t_h:    ne=[d_model, T] -- h uploaded row-major (data[k] = h.flat[k]).
+    # t_w1_t: ne=[d_model, d_ff] -- w1 uploaded transposed.
+    # t_w2_t: ne=[d_ff, d_model] -- w2 uploaded transposed.
+    @t_h    = TinyNN.tnn_input_2d_f32(@sess, t_seq,  d_model)
+    @t_w1_t = TinyNN.tnn_input_2d_f32(@sess, d_ff,   d_model)
+    @t_w2_t = TinyNN.tnn_input_2d_f32(@sess, d_model, d_ff)
 
-    @sess2    = TinyNN.tnn_session_new(0)
-    @t_hidden = TinyNN.tnn_input_2d_f32(@sess2, t_seq, d_ff)
-    @t_w2_t   = TinyNN.tnn_input_2d_f32(@sess2, d_model, d_ff)
-    @tc2      = TinyNN.tnn_matmul(@sess2, @t_hidden, @t_w2_t)
-    TinyNN.tnn_realize(@sess2, @tc2)
+    # Chain: mul_mat(w1_t, h) -> gelu -> mul_mat(w2_t, hidden).
+    # Result shapes (ggml ne):  [d_ff, T] -> [d_ff, T] -> [d_model, T].
+    @t_pre    = TinyNN.tnn_matmul(@sess, @t_w1_t, @t_h)
+    @t_hidden = TinyNN.tnn_gelu(@sess, @t_pre)
+    @t_out    = TinyNN.tnn_matmul(@sess, @t_w2_t, @t_hidden)
+    # Mark intermediates as outputs so the scheduler doesn't alias
+    # their buffers with later ops -- backward needs pre and hidden.
+    TinyNN.tnn_set_output(@t_pre)
+    TinyNN.tnn_set_output(@t_hidden)
+    TinyNN.tnn_set_output(@t_out)
+    TinyNN.tnn_realize(@sess, @t_out)
 
     @realized = true
   end
@@ -114,6 +123,7 @@ module TinyNN
   ffi_func :tnn_get_rows_back,    [:ptr, :ptr, :ptr, :ptr], :ptr
   ffi_func :tnn_input_1d_i32,     [:ptr, :int],             :ptr
   ffi_func :tnn_gelu_back_scratch,[:ptr, :int],             :void
+  ffi_func :tnn_set_output,       [:ptr],                   :void
   ffi_func :tnn_adam_step_scratch,[:ptr, :int, :double, :double, :double, :double, :double, :double], :void
 
   # GGUF model-file loader (S5). Path-based; pass nil-friendly via tnn_gguf_load_empty
@@ -153,7 +163,7 @@ module TinyNN
   # A ** B^T = A ** B (because the "B^T" inside ggml lines up with the
   # original b shape).
   def self.matmul(a, b)
-    sess = TinyNN.tnn_session_new(0)   # 0 = CPU; flip to 1 for CUDA when built
+    sess = TinyNN.tnn_session_new(0)   # 0 = CPU
 
     ta = TinyNN.tnn_input_2d_f32(sess, a.nrows, a.ncols)
     # ggml-side tensor for b^T: rows=b.ncols, cols=b.nrows.

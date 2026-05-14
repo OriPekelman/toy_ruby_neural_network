@@ -23,12 +23,16 @@ class AdamStepResult
   end
 end
 
-# Same FFNFFICache as lib/tinynn.rb but uses TinyNNCuda.  Drivers
-# require exactly one of {tinynn, tinynn_cuda}; the chosen module
-# defines FFNFFICache and the FFI-lib markers for its backend.
-class FFNFFICache
-  attr_accessor :sess1, :t_h, :t_w1_t, :tc1,
-                :sess2, :t_hidden, :t_w2_t, :tc2,
+# Same as FFNFFICache in lib/tinynn.rb but uses TinyNNCuda. The class
+# name differs so that drivers requiring BOTH modules (e.g. the CUDA
+# parity smoke loads tinynn_cuda directly, and lib/transformer.rb
+# transitively pulls in tinynn) don't trip Spinel's same-class-defined-
+# twice path. For CUDA training, sed-swap `FFNFFICache` to
+# `FFNFFICacheCuda` in lib/transformer.rb along with `TinyNN.` to
+# `TinyNNCuda.` in feed_forward_ffi.
+class FFNFFICacheCuda
+  attr_accessor :sess, :t_h, :t_w1_t, :t_w2_t,
+                :t_pre, :t_hidden, :t_out,
                 :t_seq, :d_model, :d_ff, :realized
 
   def initialize
@@ -36,14 +40,13 @@ class FFNFFICache
     @t_seq    = 0
     @d_model  = 0
     @d_ff     = 0
-    @sess1    = nil
+    @sess     = nil
     @t_h      = nil
     @t_w1_t   = nil
-    @tc1      = nil
-    @sess2    = nil
-    @t_hidden = nil
     @t_w2_t   = nil
-    @tc2      = nil
+    @t_pre    = nil
+    @t_hidden = nil
+    @t_out    = nil
   end
 
   def realize_for(t_seq, d_model, d_ff)
@@ -51,17 +54,18 @@ class FFNFFICache
     @d_model = d_model
     @d_ff    = d_ff
 
-    @sess1  = TinyNNCuda.tnn_session_new(1)
-    @t_h    = TinyNNCuda.tnn_input_2d_f32(@sess1, t_seq, d_model)
-    @t_w1_t = TinyNNCuda.tnn_input_2d_f32(@sess1, d_ff, d_model)
-    @tc1    = TinyNNCuda.tnn_matmul(@sess1, @t_h, @t_w1_t)
-    TinyNNCuda.tnn_realize(@sess1, @tc1)
+    @sess   = TinyNNCuda.tnn_session_new(1)
+    @t_h    = TinyNNCuda.tnn_input_2d_f32(@sess, t_seq,  d_model)
+    @t_w1_t = TinyNNCuda.tnn_input_2d_f32(@sess, d_ff,   d_model)
+    @t_w2_t = TinyNNCuda.tnn_input_2d_f32(@sess, d_model, d_ff)
 
-    @sess2    = TinyNNCuda.tnn_session_new(1)
-    @t_hidden = TinyNNCuda.tnn_input_2d_f32(@sess2, t_seq, d_ff)
-    @t_w2_t   = TinyNNCuda.tnn_input_2d_f32(@sess2, d_model, d_ff)
-    @tc2      = TinyNNCuda.tnn_matmul(@sess2, @t_hidden, @t_w2_t)
-    TinyNNCuda.tnn_realize(@sess2, @tc2)
+    @t_pre    = TinyNNCuda.tnn_matmul(@sess, @t_w1_t, @t_h)
+    @t_hidden = TinyNNCuda.tnn_gelu(@sess, @t_pre)
+    @t_out    = TinyNNCuda.tnn_matmul(@sess, @t_w2_t, @t_hidden)
+    TinyNNCuda.tnn_set_output(@t_pre)
+    TinyNNCuda.tnn_set_output(@t_hidden)
+    TinyNNCuda.tnn_set_output(@t_out)
+    TinyNNCuda.tnn_realize(@sess, @t_out)
 
     @realized = true
   end
@@ -117,6 +121,7 @@ module TinyNNCuda
   # makes them "CUDA-mirrored" is just exposing them under TinyNNCuda
   # for callers using a CUDA session.
   ffi_func :tnn_gelu_back_scratch,[:ptr, :int],             :void
+  ffi_func :tnn_set_output,       [:ptr],                   :void
   ffi_func :tnn_adam_step_scratch,[:ptr, :int, :double, :double, :double, :double, :double, :double], :void
   ffi_func :tnn_tensor_ne0,       [:ptr],                   :int
   ffi_func :tnn_tensor_ne1,       [:ptr],                   :int
@@ -618,6 +623,11 @@ module TinyNNCuda
       i = i + 1
     end
     TinyNNCuda.tnn_upload(sess, tensor)
+  end
+
+  # Alias to match the CPU module's name; used by feed_forward_ffi.
+  def self.stage_transposed_and_upload(sess, target, b)
+    TinyNNCuda.upload_transposed(sess, target, b)
   end
 
   def self.download_row_major(sess, tensor, rows, cols)

@@ -319,6 +319,12 @@ void tnn_adam_step_scratch(void *sess, int n,
     }
 }
 
+void tnn_set_output(void *tensor)
+{
+    if (!tensor) return;
+    ggml_set_output((struct ggml_tensor *)tensor);
+}
+
 int tnn_realize(void *sess, void *result)
 {
     if (!sess || !result) return -1;
