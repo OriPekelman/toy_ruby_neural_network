@@ -50,3 +50,4 @@ vendor/
 
 # But DO track tinynn/README.md (the FFI bridge doc)
 !tinynn/README.md
+tinynn/ab_smoke_full_forward_skeleton

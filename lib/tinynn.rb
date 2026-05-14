@@ -75,6 +75,73 @@ class FFNFFICache
   end
 end
 
+# Full forward of a TransformerLM as one persistent ggml graph. Built
+# incrementally; this first cut covers embed + positional embedding +
+# tied unembed (the bookends of the model). Blocks (attention + FFN)
+# slot in between via successive ggml ops sharing the persistent
+# weights, with intermediate outputs marked OUTPUT so backward can
+# read them.
+#
+# Layout conventions (see project_chained_ffn_2026_05_14):
+#   - Mat (rows, cols) row-major upload  -> ggml ne=[cols, rows]
+#   - Per-block intermediates carry ne=[d_model, T]: elem(d, t) is the
+#     logical value at (row=t, col=d).
+#
+# Persistent (ctx_w):  t_token_embed (vocab, d_model), t_pos_slice
+#   (T, d_model)
+# Compute (ctx):       t_token_ids (T int32), t_logits (vocab, T)
+class FullForwardFFICache
+  attr_accessor :sess, :t_token_embed, :t_pos_slice, :t_token_ids,
+                :t_x, :t_logits,
+                :t_seq, :d_model, :vocab_size, :realized
+
+  def initialize
+    @realized   = false
+    @t_seq      = 0
+    @d_model    = 0
+    @vocab_size = 0
+    @sess          = nil
+    @t_token_embed = nil
+    @t_pos_slice   = nil
+    @t_token_ids   = nil
+    @t_x           = nil
+    @t_logits      = nil
+  end
+
+  # Build the forward graph for sequence length t_seq. After this:
+  #   - upload token_embed (once, via TinyNN.upload_row_major)
+  #   - upload pos_embed slice (once, via TinyNN.upload_row_major)
+  #   - per call: upload token_ids, compute, download logits
+  def realize_for(t_seq, d_model, vocab_size)
+    @t_seq      = t_seq
+    @d_model    = d_model
+    @vocab_size = vocab_size
+
+    @sess = TinyNN.tnn_session_new(0)
+
+    # Persistent weights.
+    @t_token_embed = TinyNN.tnn_input_2d_f32_persistent(@sess, vocab_size, d_model)
+    @t_pos_slice   = TinyNN.tnn_input_2d_f32_persistent(@sess, t_seq,      d_model)
+    TinyNN.tnn_finalize_weights(@sess)
+
+    # Compute input: token_ids as 1D int32.
+    @t_token_ids = TinyNN.tnn_input_1d_i32(@sess, t_seq)
+
+    # x = token_embed[ids] + pos_slice   (ne=[d_model, T])
+    t_embedded = TinyNN.tnn_get_rows(@sess, @t_token_embed, @t_token_ids)
+    @t_x       = TinyNN.tnn_add(@sess, t_embedded, @t_pos_slice)
+
+    # tied unembed: logits = mul_mat(token_embed, x)   (ne=[vocab, T])
+    @t_logits = TinyNN.tnn_matmul(@sess, @t_token_embed, @t_x)
+
+    TinyNN.tnn_set_output(@t_x)
+    TinyNN.tnn_set_output(@t_logits)
+    TinyNN.tnn_realize(@sess, @t_logits)
+
+    @realized = true
+  end
+end
+
 # Holder for adam_step's three return values. (Spinel doesn't reliably
 # handle tuple/array returns of mixed-shape Mats — same workaround as
 # lib/transformer.rb's NormResult/FFResult/etc.)
@@ -489,6 +556,12 @@ module TinyNN
   # tnn_scratch_set loop.
   def self.upload_row_major(sess, tensor, mat)
     TinyNN.tnn_upload_from_float_array(sess, tensor, mat.flat, mat.nrows * mat.ncols)
+  end
+
+  # Upload an Array<Int> to a 1D int32 tensor in one FFI call.
+  # Uses Spinel's :int_array spec (matz/spinel#474).
+  def self.upload_int_array(sess, tensor, indices)
+    TinyNN.tnn_upload_from_int_array(sess, tensor, indices, indices.length)
   end
 
   # Stage a Mat TRANSPOSED into scratch and upload. Use this for the
