@@ -154,13 +154,25 @@ all 40 SGD steps × 3 sequences × 2 matmuls = 240 calls per training
 step that would otherwise be 240 fresh `ggml_init` + backend-alloc
 cycles.
 
-For CUDA: `FFNFFICache` lives in both `lib/tinynn.rb` (calls TinyNN.*)
-and `lib/tinynn_cuda.rb` (calls TinyNNCuda.*). Drivers `require`
-exactly one of them; the chosen module defines `FFNFFICache` and
-the FFI-lib markers for its backend. To switch `train_minimal` to
-CUDA: change `require_relative "tinynn"` to `"tinynn_cuda"`, and
-sed `TinyNN.` → `TinyNNCuda.` in `feed_forward_ffi`'s body, then
-rebuild. A `USE_FFI_CUDA` constant for compile-time dispatch is a
+Internally `FFNFFICache` builds a single ggml session that runs the
+whole FFN as one chained graph (`mul_mat → gelu → mul_mat`):
+
+- All three result tensors (`t_pre`, `t_hidden`, `t_out`) are marked
+  with `ggml_set_output` so the scheduler keeps their buffers alive
+  past `compute` — otherwise ggml's allocator aliases `t_pre`'s buffer
+  for the gelu output, silently making backward see the wrong values.
+- Operand order `mul_mat(w_t, h)` (NOT `mul_mat(h, w_t)`) keeps the
+  result.ne0 = inner-dim of the next matmul, so the chain composes
+  without an intermediate `ggml_cont(ggml_transpose)`. All three
+  outputs then read back as plain row-major memcpy.
+
+For CUDA the equivalent class is `FFNFFICacheCuda` in
+`lib/tinynn_cuda.rb` (different name so both modules can be loaded
+into one Spinel translation unit without colliding). To switch
+`train_minimal` to CUDA: change `require_relative "tinynn"` to
+`"tinynn_cuda"`, sed `TinyNN.` → `TinyNNCuda.` and `FFNFFICache.new`
+→ `FFNFFICacheCuda.new` in `lib/transformer.rb`, then rebuild.
+A `USE_FFI_CUDA` constant for compile-time dispatch is a
 straightforward future addition.
 
 ## Op coverage
@@ -185,6 +197,8 @@ All 16 ops verified parity on both backends:
 | `sgd_step(p, g, lr)`         | ✅ | ✅ | `ab-smoke-sgd` | composed: `add(p, scale(g, -lr))` |
 | `adam_step(...)`             | ✅ | ✅ | `ab-smoke-adam` | custom CPU kernel (sqrt + div) |
 | `ffn_pipeline(h, w1, w2)`    | ✅ | ✅ | `ab-smoke-pipeline` | `gelu(h·w1)·w2` chained |
+| FFN chained graph            | ✅ | ✅ | `ab-smoke-ffncache` | `FFNFFICache`: single session, GeLU on GPU |
+| `opt_step_adamw(...)`        | ✅ | ✅ | `ab-smoke-adamw-op{,-cuda}` | ggml-native AdamW; in-place update; matches plain Adam at wd=0 |
 | GGUF load/write/read         | ✅ | n/a | `gguf-smoke` | F32 verified; quantized via `to_float` traits |
 | `transpose(a)` (standalone)  | 🟡 | — | — | `ggml_cont(ggml_transpose)` hits scheduler alloc; fold into consumers |
 | `rms_norm_back(x, dy, ε)`    | 🟡 | — | — | FFI bound; ggml output disagrees w/ docs via backend-sched — [ggml#1491](https://github.com/ggml-org/ggml/issues/1491) |
@@ -223,21 +237,23 @@ in the bulk-upload primitive.
 ### End-to-end train_minimal (40 SGD steps × 3 sequences, toy shape)
 
 ```
-native           (USE_FFI_MATMUL=false)      :  15–26 ms  loss 0.034
-CPU FFI persistent                            :  24 ms     loss 0.037
-CUDA FFI persistent                           :  757 ms    loss 0.039
-CPU FFI one-shot     (pre-persistent baseline) : 378 ms
-CUDA FFI one-shot    (pre-persistent baseline) :3386 ms
+native           (USE_FFI_MATMUL=false)        :  15–26 ms  loss 0.034
+CPU FFI chained (single-session FFN)           :  24 ms     loss 0.036
+CUDA FFI chained                                :  604 ms    loss 0.036
+(prev) CUDA FFI two-session + host-side GeLU    :  757 ms    loss 0.039
+CPU FFI one-shot     (pre-persistent baseline)  : 378 ms
+CUDA FFI one-shot    (pre-persistent baseline)  :3386 ms
 ```
 
-CPU FFI persistent matches native at toy shape. CUDA persistent at
-toy shape is still **30× slower than native** because (i) weights
-re-upload every forward call, (ii) `feed_forward_ffi`'s two matmuls
-each have their own session with host-side GeLU between them, so
-activations cross host↔device twice per FFN per step. The cure
-is fully-on-GPU training (see "What's next" below). At LLM scale
-the host↔device cost is amortised across vastly more matmul math
-and CUDA decisively wins.
+CPU FFI chained matches native at toy shape. CUDA chained is 20%
+faster than the two-session version and converges slightly better,
+but at toy shape it's still **~30× slower than native** because (i)
+FFN weights re-upload every forward call, (ii) the optimizer step
+runs on host, and (iii) attention/embed/unembed aren't on GPU at
+all — every FFN call ferries activations across the host↔device
+boundary. The cure is fully-on-GPU training (see "What's next"
+below). At LLM scale the host↔device cost is amortised across
+vastly more matmul math and CUDA decisively wins.
 
 ## Architecture notes
 
@@ -286,19 +302,23 @@ no per-element FFI calls.
 
 ## What's next — fully-on-GPU training
 
-The current persistent-session refactor amortises ggml_init across
-training steps but still ferries activations host↔device twice per
-FFN per step. To make CUDA actually fast at any scale, three more
-chunks of work:
+The chained-graph refactor (item 1) keeps activations on GPU within
+the FFN; the optimizer wrapper (item 2 step 1) gives us on-device
+AdamW. Remaining work to move CUDA from "30× slower at toy shape"
+to "wins at all scales":
 
-1. **GeLU as a ggml graph node** so the FFN's two matmuls and the
-   GeLU between them are one chained graph — activations stay on
-   GPU between matmul1 and matmul2. ggml has `ggml_gelu` with the
-   tanh-approx semantics we need; the trick is operand layout so
-   the chain doesn't need an intermediate transpose.
-2. **Weights pinned on GPU**; only re-upload after `adam_step` —
-   which itself should run on-device via `ggml_opt_step_adamw` or
-   a custom kernel. Eliminates per-step weight transfers.
+1. ~~**GeLU as a ggml graph node**~~ — ✅ done. `FFNFFICache` now
+   runs `mul_mat → gelu → mul_mat` as one chained graph.
+   `ab-smoke-ffncache` proves parity; CUDA train_minimal dropped
+   from 757 ms to 604 ms.
+2. **Weights pinned on GPU**; on-device optimizer step. Step 1
+   landed: `tnn_opt_step_adamw` wraps ggml's built-in AdamW op
+   and matches the project's plain-Adam at f32 precision on both
+   backends (`ab-smoke-adamw-op{,-cuda}`). Step 2 (wiring it into
+   `FFNFFICache` with persistent weight/grad/m/v tensors and a
+   second cgraph for the update) is the next refactor. Once
+   landed, FFN weights never re-upload and `apply_gradients_adam`
+   only ferries gradients (smaller) to GPU.
 3. **Full forward as one persistent graph** — attention, embed,
    unembed — not just FFN. The single-step training loop becomes:
    upload tokens (tiny) → compute → download loss (tiny).
