@@ -62,3 +62,5 @@ tep_demo/api
 tep_demo/.*.tep.rb
 tep_demo/_tep_lib/
 tinynn/ab_smoke_kv_attn
+data/*.gguf
+prep/_hf_cache/
