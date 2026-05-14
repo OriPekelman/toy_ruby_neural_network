@@ -74,3 +74,5 @@ data/ours_logits.txt
 data/ref_logits.txt
 tinynn/gpt2_ffi_parity
 data/ours_ffi_logits.txt
+distilgpt2_demo_ffi
+tinynn/gpt2_bench
