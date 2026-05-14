@@ -305,6 +305,14 @@ gguf-inspect: tinynn/gguf_inspect
 tinynn/gguf_inspect: tinynn/gguf_inspect.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/gguf_inspect.rb -o tinynn/gguf_inspect
 
+# GPT2LM build smoke: confirm lib/gpt2.rb Spinel-compiles and the
+# forward shapes line up. Toy dims, random weights — values mean nothing.
+gpt2-build-smoke: tinynn/gpt2_build_smoke
+	./tinynn/gpt2_build_smoke
+
+tinynn/gpt2_build_smoke: tinynn/gpt2_build_smoke.rb lib/transformer.rb lib/gpt2.rb
+	$(SPINEL) tinynn/gpt2_build_smoke.rb -o tinynn/gpt2_build_smoke
+
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed
 
