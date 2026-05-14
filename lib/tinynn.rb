@@ -354,6 +354,10 @@ module TinyNN
   ffi_func :tnn_diag_mask_inf,    [:ptr, :ptr, :int],       :ptr
   ffi_func :tnn_concat,           [:ptr, :ptr, :ptr, :int], :ptr
   ffi_func :tnn_null_ptr,         [],                       :ptr
+  ffi_func :tnn_layer_norm,       [:ptr, :ptr, :ptr, :ptr, :double], :ptr
+  ffi_func :tnn_view_1d,          [:ptr, :ptr, :int, :long],         :ptr
+  ffi_func :tnn_view_2d,          [:ptr, :ptr, :int, :int, :long, :long], :ptr
+  ffi_func :tnn_cpy,              [:ptr, :ptr, :ptr],       :ptr
   ffi_func :tnn_transpose,        [:ptr, :ptr],             :ptr
   ffi_func :tnn_scale,            [:ptr, :ptr, :double],    :ptr
   ffi_func :tnn_rms_norm_back,    [:ptr, :ptr, :ptr, :double], :ptr

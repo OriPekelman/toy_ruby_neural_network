@@ -62,12 +62,24 @@ void  *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps);
                                                          /* RMSNorm(x) * gamma_row, last-dim normalize, broadcast over the leading dim.
                                                             x: (n1, n0) with ne0=feature, ne1=batch_or_T
                                                             gamma_row: (1, n0) — a 1xfeature tensor */
+void  *tnn_layer_norm(void *sess, void *x, void *gamma_row, void *beta_row, double eps);
+                                                         /* LayerNorm: y = gamma * (x-mean)/sqrt(var+eps) + beta.
+                                                            For HF-style models (GPT-2 / GPT-Neo / TinyStories). */
 void  *tnn_softmax(void *sess, void *a);                /* per-row softmax along ne[0] */
 void  *tnn_diag_mask_inf(void *sess, void *a, int n_past);
                                                          /* set elements above the diagonal (off by n_past) to -inf */
 void  *tnn_concat(void *sess, void *a, void *b, int dim);
                                                          /* concat a and b along the given ne axis */
 void  *tnn_null_ptr(void);                              /* :ptr-typed NULL seed for Spinel PtrArray inference */
+
+/* KV-cache primitives. view_1d / view_2d / cpy let us slice into a
+ * persistent (max_T, d_head) buffer and write a single row at the
+ * current decode position. Offsets are baked in at graph build time;
+ * to handle a runtime position, the caller rebuilds the decode graph
+ * per step (cheap; just metadata). */
+void  *tnn_view_1d(void *sess, void *a, int ne0, long offset);
+void  *tnn_view_2d(void *sess, void *a, int ne0, int ne1, long nb1, long offset);
+void  *tnn_cpy(void *sess, void *a, void *b);
 void  *tnn_transpose(void *sess, void *a);              /* materialised transpose: (rows,cols) → (cols,rows) */
 void  *tnn_scale(void *sess, void *a, double s);        /* element-wise a * s */
 

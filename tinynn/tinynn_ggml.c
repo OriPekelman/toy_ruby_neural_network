@@ -270,12 +270,62 @@ void *tnn_rms_norm(void *sess, void *x, void *gamma_row, double eps)
     return (void *)ggml_mul(s->ctx, normed, (struct ggml_tensor *)gamma_row);
 }
 
+/* LayerNorm: y = gamma * (x - mean) / sqrt(var + eps) + beta. ggml_norm
+ * computes the normalized (x - mean)/sqrt(var+eps) part; we then
+ * multiply by gamma and add beta. Used for HF-style models (GPT-2 /
+ * GPT-Neo / TinyStories) that use LayerNorm rather than RMSNorm. */
+void *tnn_layer_norm(void *sess, void *x, void *gamma_row, void *beta_row, double eps)
+{
+    if (!sess || !x || !gamma_row || !beta_row) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    struct ggml_tensor *normed = ggml_norm(s->ctx,
+                                             (struct ggml_tensor *)x,
+                                             (float)eps);
+    struct ggml_tensor *scaled = ggml_mul(s->ctx, normed,
+                                            (struct ggml_tensor *)gamma_row);
+    return (void *)ggml_add(s->ctx, scaled,
+                              (struct ggml_tensor *)beta_row);
+}
+
 /* Returns a NULL pointer typed as :ptr. Useful as an Array<:ptr> seed
  * value so Spinel infers the array as a PtrArray rather than typing
  * it from a `[nil]` literal (which can resolve to IntArray). */
 void *tnn_null_ptr(void)
 {
     return NULL;
+}
+
+/* 1-D view of a tensor at byte `offset`, of length `ne0`. Used to
+ * slice a single row out of a (max_T, d_head) KV buffer at a runtime
+ * position computed by the caller (offset = pos * d_head * 4). */
+void *tnn_view_1d(void *sess, void *a, int ne0, long offset)
+{
+    if (!sess || !a) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_view_1d(s->ctx, (struct ggml_tensor *)a,
+                                  (int64_t)ne0, (size_t)offset);
+}
+
+/* 2-D view of a tensor: rows of length ne0 stride nb1, ne1 rows
+ * total, starting at byte `offset`. Used for slicing K/V[0:pos+1] in
+ * attention. nb1 = d_head * 4 for our row-of-floats KV layout. */
+void *tnn_view_2d(void *sess, void *a, int ne0, int ne1, long nb1, long offset)
+{
+    if (!sess || !a) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_view_2d(s->ctx, (struct ggml_tensor *)a,
+                                  (int64_t)ne0, (int64_t)ne1,
+                                  (size_t)nb1, (size_t)offset);
+}
+
+/* Copy a -> b. Used to write k_new into a view of the persistent K
+ * buffer (b = view_2d(K, d_head, 1, ..., offset=pos*d_head*4)). */
+void *tnn_cpy(void *sess, void *a, void *b)
+{
+    if (!sess || !a || !b) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_cpy(s->ctx, (struct ggml_tensor *)a,
+                              (struct ggml_tensor *)b);
 }
 
 /* Concatenate `a` and `b` along the given dim (0 = ne[0], 1 = ne[1]).
