@@ -54,3 +54,5 @@ tinynn/ab_smoke_full_forward_skeleton
 tinynn/ab_smoke_full_forward_block
 tinynn/full_forward_bench
 tinynn/full_forward_bench_cuda
+inference_demo
+inference_demo_cuda

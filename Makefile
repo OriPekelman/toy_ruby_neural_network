@@ -35,6 +35,14 @@ train_minimal: train_minimal.rb lib/transformer.rb lib/training.rb lib/tinynn.rb
 train_tinystories: train_tinystories.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
+# Inference demo: greedy autoregressive generation via FullForwardFFICache.
+# Parity-checks vs native TransformerLM.forward.
+inference_demo: inference_demo.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
+inference_demo_cuda: inference_demo_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+	$(SPINEL) $< -o $@
+
 # --- ggml vendor ------------------------------------------------------------
 $(GGML_DIR)/CMakeLists.txt:
 	mkdir -p vendor
