@@ -56,6 +56,12 @@ module TinyNNCuda
   ffi_func :tnn_download,         [:ptr, :ptr],             :int
   ffi_func :tnn_upload_from_float_array, [:ptr, :ptr, :float_array, :size_t], :int
   ffi_func :tnn_upload_from_int_array,   [:ptr, :ptr, :int_array,   :size_t], :int
+  # CPU-scratch-backed custom kernels (gelu_back, adam_step). They
+  # operate on host memory regardless of the session's backend; what
+  # makes them "CUDA-mirrored" is just exposing them under TinyNNCuda
+  # for callers using a CUDA session.
+  ffi_func :tnn_gelu_back_scratch,[:ptr, :int],             :void
+  ffi_func :tnn_adam_step_scratch,[:ptr, :int, :double, :double, :double, :double, :double, :double], :void
   ffi_func :tnn_tensor_ne0,       [:ptr],                   :int
   ffi_func :tnn_tensor_ne1,       [:ptr],                   :int
 
@@ -441,6 +447,88 @@ module TinyNNCuda
   # SGD: param_new = param - lr * grad. Composed.
   def self.sgd_step(param, grad, lr)
     TinyNNCuda.add(param, TinyNNCuda.scale(grad, -lr))
+  end
+
+  # GeLU backward (tanh approx) via custom CPU kernel. Mirrors
+  # TinyNN.gelu_back; same scratch-layout protocol.
+  def self.gelu_back(x, dh)
+    sess = TinyNNCuda.tnn_session_new(1)
+    n = x.nrows * x.ncols
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, i, x.flat[i])
+      i = i + 1
+    end
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, n + i, dh.flat[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_gelu_back_scratch(sess, n)
+    out = Mat.new(x.nrows, x.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNNCuda.tnn_scratch_get(sess, 2 * n + i)
+      i = i + 1
+    end
+    TinyNNCuda.tnn_session_free(sess)
+    out
+  end
+
+  # cross_entropy_grad = (softmax(logits) - one_hot(targets)) / n_pred.
+  # Composable from TinyNNCuda.softmax + scale + add.
+  def self.cross_entropy_grad(logits, targets, n_pred)
+    oh = Mat.new(logits.nrows, logits.ncols)
+    i = 0
+    while i < n_pred
+      oh.flat[i * logits.ncols + targets[i]] = 1.0
+      i = i + 1
+    end
+    sm = TinyNNCuda.softmax(logits)
+    inv_n = 1.0 / n_pred.to_f
+    sm_s = TinyNNCuda.scale(sm, inv_n)
+    oh_s = TinyNNCuda.scale(oh, -inv_n)
+    TinyNNCuda.add(sm_s, oh_s)
+  end
+
+  # Adam step via custom CPU kernel. Returns AdamStepResult (param,
+  # mom_m, mom_v) — same shape as TinyNN.adam_step.
+  def self.adam_step(param, grad, m, v, lr, b1, b2, eps, omc1, omc2)
+    sess = TinyNNCuda.tnn_session_new(1)
+    n = param.nrows * param.ncols
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, i, param.flat[i])
+      i = i + 1
+    end
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, n + i, grad.flat[i])
+      i = i + 1
+    end
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, 2 * n + i, m.flat[i])
+      i = i + 1
+    end
+    i = 0
+    while i < n
+      TinyNNCuda.tnn_scratch_set(sess, 3 * n + i, v.flat[i])
+      i = i + 1
+    end
+    TinyNNCuda.tnn_adam_step_scratch(sess, n, lr, b1, b2, eps, omc1, omc2)
+    new_param = Mat.new(param.nrows, param.ncols)
+    new_mom_m = Mat.new(param.nrows, param.ncols)
+    new_mom_v = Mat.new(param.nrows, param.ncols)
+    i = 0
+    while i < n
+      new_param.flat[i] = TinyNNCuda.tnn_scratch_get(sess, i)
+      new_mom_m.flat[i] = TinyNNCuda.tnn_scratch_get(sess, 2 * n + i)
+      new_mom_v.flat[i] = TinyNNCuda.tnn_scratch_get(sess, 3 * n + i)
+      i = i + 1
+    end
+    TinyNNCuda.tnn_session_free(sess)
+    AdamStepResult.new(new_param, new_mom_m, new_mom_v)
   end
 
   # ----- Persistent-session API (mirrors TinyNN's; see lib/tinynn.rb) -----

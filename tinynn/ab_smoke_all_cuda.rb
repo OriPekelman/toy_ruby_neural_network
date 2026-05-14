@@ -312,3 +312,119 @@ pre = h_p.matmul(w1_p)
 hid = gelu_native(pre)
 nat = hid.matmul(w2_p)
 cmp("ffn_pipeline", nat, TinyNNCuda.ffn_pipeline(h_p, w1_p, w2_p), 1.0e-3)
+
+# --- gelu_back ---
+def gelu_back_native(x, dh)
+  c = 0.7978845608028654
+  k = 0.044715
+  out = Mat.new(x.nrows, x.ncols)
+  n = x.nrows * x.ncols
+  i = 0
+  while i < n
+    xi = x.flat[i]
+    di = dh.flat[i]
+    xi2 = xi * xi
+    u = c * (xi + k * xi * xi2)
+    tu = Math.tanh(u)
+    sech2 = 1.0 - tu * tu
+    dudx = c * (1.0 + 3.0 * k * xi2)
+    dgelu = 0.5 * (1.0 + tu) + 0.5 * xi * sech2 * dudx
+    out.flat[i] = di * dgelu
+    i = i + 1
+  end
+  out
+end
+gb_x = Mat.new(1, 5)
+gb_x.flat[0] =  0.0; gb_x.flat[1] = 0.5; gb_x.flat[2] = 3.0; gb_x.flat[3] = -0.5; gb_x.flat[4] = -3.0
+gb_d = Mat.new(1, 5)
+gb_d.flat[0] = 1.0; gb_d.flat[1] = -0.5; gb_d.flat[2] = 2.0; gb_d.flat[3] = -1.0; gb_d.flat[4] = 0.5
+cmp("gelu_back", gelu_back_native(gb_x, gb_d), TinyNNCuda.gelu_back(gb_x, gb_d), 1.0e-3)
+
+# --- cross_entropy_grad ---
+def ce_grad_native(logits, targets, n_pred)
+  sm = Mat.new(logits.nrows, logits.ncols)
+  r = 0
+  while r < logits.nrows
+    m = logits.flat[r * logits.ncols]
+    c = 1
+    while c < logits.ncols
+      v = logits.flat[r * logits.ncols + c]
+      if v > m
+        m = v
+      end
+      c = c + 1
+    end
+    s = 0.0
+    c = 0
+    while c < logits.ncols
+      e = Math.exp(logits.flat[r * logits.ncols + c] - m)
+      sm.flat[r * logits.ncols + c] = e
+      s = s + e
+      c = c + 1
+    end
+    c = 0
+    while c < logits.ncols
+      sm.flat[r * logits.ncols + c] = sm.flat[r * logits.ncols + c] / s
+      c = c + 1
+    end
+    r = r + 1
+  end
+  out = Mat.new(logits.nrows, logits.ncols)
+  inv = 1.0 / n_pred.to_f
+  i = 0
+  while i < n_pred
+    v = 0
+    while v < logits.ncols
+      term = sm.flat[i * logits.ncols + v]
+      if v == targets[i]
+        term = term - 1.0
+      end
+      out.flat[i * logits.ncols + v] = term * inv
+      v = v + 1
+    end
+    i = i + 1
+  end
+  out
+end
+ce_logits = Mat.new(3, 5)
+i = 0
+while i < 15
+  ce_logits.flat[i] = i.to_f * 0.3 - 2.0
+  i = i + 1
+end
+ce_targets = [4, 0, 2]
+cmp("ce_grad", ce_grad_native(ce_logits, ce_targets, 3), TinyNNCuda.cross_entropy_grad(ce_logits, ce_targets, 3), 1.0e-3)
+
+# --- adam_step ---
+ad_p = Mat.new(3, 4)
+ad_g = Mat.new(3, 4)
+ad_m = Mat.new(3, 4)
+ad_v = Mat.new(3, 4)
+i = 0
+while i < 12
+  ad_p.flat[i] = i.to_f * 0.1 - 0.5
+  ad_g.flat[i] = (i.to_f - 6.0) * 0.05
+  ad_m.flat[i] = i.to_f * 0.02
+  ad_v.flat[i] = i.to_f * 0.01
+  i = i + 1
+end
+def adam_native(p, g, mm, vv, lr, b1, b2, eps, omc1, omc2)
+  np = Mat.new(p.nrows, p.ncols)
+  one_minus_b1 = 1.0 - b1
+  one_minus_b2 = 1.0 - b2
+  n = p.nrows * p.ncols
+  i = 0
+  while i < n
+    gi = g.flat[i]
+    new_m = b1 * mm.flat[i] + one_minus_b1 * gi
+    new_v = b2 * vv.flat[i] + one_minus_b2 * gi * gi
+    m_hat = new_m / omc1
+    v_hat = new_v / omc2
+    np.flat[i] = p.flat[i] - lr * m_hat / (Math.sqrt(v_hat) + eps)
+    i = i + 1
+  end
+  np
+end
+nat_ap = adam_native(ad_p, ad_g, ad_m, ad_v, 0.001, 0.9, 0.999, 1.0e-8, 0.1, 0.001)
+ffi_ap = TinyNNCuda.adam_step(ad_p, ad_g, ad_m, ad_v, 0.001, 0.9, 0.999, 1.0e-8, 0.1, 0.001).param
+cmp("adam_step param", nat_ap, ffi_ap, 1.0e-4)
