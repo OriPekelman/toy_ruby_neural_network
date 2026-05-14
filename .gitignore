@@ -52,3 +52,4 @@ vendor/
 !tinynn/README.md
 tinynn/ab_smoke_full_forward_skeleton
 tinynn/ab_smoke_full_forward_block
+tinynn/full_forward_bench

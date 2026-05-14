@@ -106,9 +106,14 @@ void *tnn_session_new(int prefer_cuda)
      * wiped before this session builds its graph. */
     ggml_backend_sched_reset(e->sched);
 
-    /* Two cgraphs share ctx, so reserve room for both. */
-    s->ctx_buf_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE * 2
-                      + ggml_graph_overhead() * 2;
+    /* Two cgraphs share ctx, so reserve room for both. The graph
+     * size budget needs to accommodate per-head intermediates in the
+     * full-forward graph (per block: ~8 tensors per head + 10 block-
+     * level + weights). Several MB; the no_alloc=true context only
+     * holds metadata so this is cheap bytes-wise. */
+    s->ctx_buf_size = ggml_tensor_overhead() * 8192
+                      + ggml_graph_overhead_custom(GGML_DEFAULT_GRAPH_SIZE, false) * 4
+                      + 4 * 1024 * 1024;
     s->ctx_buf = (uint8_t *)calloc(1, s->ctx_buf_size);
     struct ggml_init_params params = {
         /*.mem_size   =*/ s->ctx_buf_size,
@@ -119,9 +124,12 @@ void *tnn_session_new(int prefer_cuda)
     s->graph   = ggml_new_graph(s->ctx);
     s->graph_b = ggml_new_graph(s->ctx);
 
-    /* Smaller weights ctx: just enough room for the param tensors'
-     * metadata. Sized for ~64 weight tensors per FFNFFICache. */
-    s->ctx_w_buf_size = ggml_tensor_overhead() * 64;
+    /* Weights ctx pool. Sized for ~1024 weight tensors -- generous
+     * upper bound that covers FullForwardFFICache at LLM scale
+     * (per layer: 2 norms + 3*n_heads + 3 = up to ~50 tensors; for
+     * 16 layers that's 800; plus global). no_alloc=true so this is
+     * just metadata bytes. */
+    s->ctx_w_buf_size = ggml_tensor_overhead() * 1024;
     s->ctx_w_buf = (uint8_t *)calloc(1, s->ctx_w_buf_size);
     struct ggml_init_params w_params = {
         /*.mem_size   =*/ s->ctx_w_buf_size,

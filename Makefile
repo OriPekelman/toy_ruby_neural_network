@@ -186,6 +186,13 @@ ab-smoke-full-forward-block: tinynn/ab_smoke_full_forward_block
 tinynn/ab_smoke_full_forward_block: tinynn/ab_smoke_full_forward_block.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/ab_smoke_full_forward_block.rb -o tinynn/ab_smoke_full_forward_block
 
+# Wallclock bench: native TransformerLM.forward vs FullForwardFFICache.
+full-forward-bench: tinynn/full_forward_bench
+	./tinynn/full_forward_bench
+
+tinynn/full_forward_bench: tinynn/full_forward_bench.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/full_forward_bench.rb -o tinynn/full_forward_bench
+
 ab-smoke-dual-graph-cuda: tinynn/ab_smoke_dual_graph_cuda
 	./tinynn/ab_smoke_dual_graph_cuda
 
