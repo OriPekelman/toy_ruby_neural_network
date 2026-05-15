@@ -614,12 +614,16 @@ int tnn_add_to_graph(void *sess, void *tensor)
     return 0;
 }
 
-/* Reset for rebuild: clear realized flag and start a fresh cgraph in
- * the SAME ctx. The persistent backend buffer (ctx_w) is untouched,
- * so persistent tensors keep their data. The previous cgraph's nodes
- * stay in ctx (it grows monotonically); after enough rebuilds the
- * ctx_buf runs out. For up to ~10000 short-rebuild cycles at our
- * default ctx_buf size that's not a concern. Per decode step:
+/* Reset for rebuild: free the compute ctx entirely and start fresh.
+ * The persistent ctx_w + its backend buffer are untouched, so weights
+ * keep their data. Previously this only swapped graphs in the same
+ * ctx — that grew monotonically and overflowed after ~80 decode steps
+ * at gpt2-small + max_T=1024 (each step creates ~1300 new tensor
+ * headers, none get reclaimed). Tearing ctx down per step makes the
+ * per-decode-step compute fully bounded in metadata footprint.
+ *
+ * The scheduler also has internal state tied to tensor pointers; we
+ * reset it before realize, so this is safe. Per decode step:
  *   tnn_reset_for_rebuild(sess)
  *   ... build ops with current pos baked in ...
  *   tnn_realize(sess, result_tensor)
@@ -628,9 +632,23 @@ int tnn_reset_for_rebuild(void *sess)
 {
     if (!sess) return -1;
     tnn_session *s = (tnn_session *)sess;
+    if (s->ctx) {
+        ggml_free(s->ctx);
+    }
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ s->ctx_buf_size,
+        /*.mem_buffer =*/ s->ctx_buf,
+        /*.no_alloc   =*/ true,
+    };
+    s->ctx      = ggml_init(params);
     s->realized = 0;
     /* Must match the size used in tnn_session_new — see comment there. */
     s->graph    = ggml_new_graph_custom(s->ctx, 16384, false);
+    /* graph_b is the secondary cgraph used by some training paths
+     * (ab_smoke_dual_graph). Recreate so its pointer stays valid. */
+    s->graph_b    = ggml_new_graph_custom(s->ctx, 16384, false);
+    s->realized_b = 0;
+    s->last_graph = 0;
     return 0;
 }
 

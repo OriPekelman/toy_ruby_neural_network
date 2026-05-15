@@ -15,8 +15,12 @@ require_relative "lib/gpt2_ffi_kv"
 require_relative "lib/gguf_load"
 require_relative "lib/training"
 
-N_NEW    = 8
-MAX_T    = 32     # KV-cache capacity; must hold prompt + N_NEW
+N_NEW    = 30
+MAX_T    = 1024   # KV-cache capacity. GPT-2 / DistilGPT2 max context.
+                  # Per-head buffer: 2 × d_head × max_T floats (~128 KB
+                  # per head at max_T=1024, d_head=64). Total KV
+                  # footprint at gpt2-small: 12 layers × 12 heads × 2 ×
+                  # 64 × 1024 × 4 B ≈ 72 MB on top of the weights.
 IDS_PATH = "data/prompt_ids.txt"
 # Swap this to point at a different GPT-2 variant (data/gpt2-f32.gguf,
 # data/gpt2-medium-f32.gguf, …) — the hyperparams are read from the
