@@ -101,6 +101,32 @@ graph-build overhead. CUDA pulls further ahead at larger models
 contexts, where the matmuls are big enough that GPU parallelism
 matters.
 
+### Long contexts (MAX_T up to 1024)
+
+Demo defaults now run at MAX_T=1024 (GPT-2's full context window).
+Tested with a 162-token prompt:
+
+```
+"The history of the modern computer is a remarkable journey
+ spanning centuries... [162 tokens]... and finally"
+   → "Today, computers are the most powerful technology in the
+       world..."
+```
+
+Per-step decode stays ~11 ms at small positions, drifts up to
+~14 ms by pos~190 (the linear-in-pos cost of the attention matmul
+against K_history). At pos=1023 we'd project ~25 ms/step; full
+1024-token generation from a 5-token prompt is ~15–20 s.
+
+The greedy decoder will loop on repeated phrases at longer outputs
+(classic small-model behaviour); temperature / top-k sampling is a
+trivial follow-up and stays orthogonal to anything below.
+
+One C-shim fix that bumping MAX_T exposed: `tnn_reset_for_rebuild`
+used to swap graphs in the same compute ctx, leaving ~1300 dead
+tensor headers per decode step. Now it tears ctx down and reinits
+per step; ctx_w (persistent weights) is untouched so weights survive.
+
 ### Quantized GGUF (Q8_0 / Q4_0)
 
 Same converter, add `--quantize q8_0` or `--quantize q4_0`:
