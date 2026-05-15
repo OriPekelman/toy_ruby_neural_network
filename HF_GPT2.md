@@ -40,24 +40,35 @@ make distilgpt2_demo_kv   && ./distilgpt2_demo_kv    # KV-cache FFI
 
 Reference produced by `prep/parity.py ref` (loads distilgpt2 via
 PyTorch + transformers, dumps the last-row logits for the same
-5-token prompt). All three Ruby paths match the reference at F32
+5-token prompt). All five Ruby paths match the reference at F32
 round-trip precision:
 
 | Path | max-abs diff | mean-abs diff | argmax | top-5 |
 |---|---:|---:|---:|---:|
 | Native Mat (f64) | `1.16e-4` | `1.93e-5` | ✓ | 5/5 |
-| FFI full-forward (f32) | `5.42e-3` | `3.65e-3` | ✓ | 5/5 |
-| FFI KV decode (f32) | `3.06e-3` | `1.36e-3` | ✓ | 5/5 |
+| FFI-CPU full-forward (f32) | `5.42e-3` | `3.65e-3` | ✓ | 5/5 |
+| FFI-CUDA full-forward (f32) | `5.42e-3` | `3.65e-3` | ✓ | 5/5 |
+| FFI-CPU KV decode (f32) | `3.06e-3` | `1.36e-3` | ✓ | 5/5 |
+| FFI-CUDA KV decode (f32) | `3.01e-3` | `1.37e-3` | ✓ | 5/5 |
 
 (KV's max-abs is actually *better* than full-forward's because
 per-position writes accumulate less F32 error than a full-sequence
-matmul.)
+matmul. CUDA vs CPU are equal to F32 ULP, as expected — both run
+the same ggml graph on f32 inputs, just on different backends.)
 
-Re-run: `make gpt2-parity` (native dump), `make gpt2-ffi-parity`
-(full-forward dump), `make gpt2-kv-parity` (KV dump), then
-`./prep/parity.py compare --ours data/ours_*_logits.txt`.
+Re-run on Mac:
+- `make gpt2-parity` (native), `make gpt2-ffi-parity` (full-forward),
+  `make gpt2-kv-parity` (KV).
 
-## Bench (M2 Air, single CPU worker)
+Re-run on gx10:
+- `make gpt2-ffi-parity-cuda`, `make gpt2-kv-parity-cuda`.
+
+Then `./prep/parity.py compare --ours data/ours_*_logits.txt` from
+the Mac.
+
+## Bench
+
+### M2 Air (single CPU worker, ggml-cpu backend)
 
 `make gpt2-bench`, prompt = "Hello, my name is" (5 tokens):
 
@@ -67,16 +78,45 @@ Re-run: `make gpt2-parity` (native dump), `make gpt2-ffi-parity`
 | FFI full-forward, T_SEQ=5 | 20.2 | 49.4 | 63.7× |
 | FFI KV decode, pos=5..34 | 22.7 | 44.1 | 56.9× |
 
+### gx10 (NVIDIA GB10, ggml-cuda backend)
+
+`make gpt2-bench-cuda`, same prompt:
+
+| | ms/forward | forwards/sec | speedup vs native (gx10) |
+|---|---:|---:|---:|
+| Native Mat, f64 | 374.8 | 2.67 | 1× |
+| FFI-CUDA full-forward, T_SEQ=5 | 7.0 | 142.4 | 53.4× |
+| FFI-CUDA KV decode, pos=5..34 | 6.2 | 160.6 | 60.2× |
+
+End-to-end demo generation (`./distilgpt2_demo_kv_cuda` on gx10) of
+"Hello, my name is" → "Hello, my name is J.J.K. Rowling.":
+- prefill (5 tokens): 33 ms
+- 7 new tokens: 40 ms (5.6 ms/step)
+- total: 73 ms (vs Mac CPU KV's 94 ms = ~22% faster)
+
+At this toy shape (distilgpt2, T_SEQ=5..16) CUDA's advantage is
+modest — the model is small and per-step compute is dominated by
+graph-build overhead. CUDA pulls further ahead at larger models
+(gpt2-medium 355M, gpt2-large 774M, gpt2-xl 1.5B) and longer
+contexts, where the matmuls are big enough that GPU parallelism
+matters.
+
+### KV vs full-forward at growing T
+
 The bench at T_SEQ=5 doesn't fully show the KV win: both FFI paths
 are dominated by graph-build overhead at this scale. As T grows,
 full-forward attention is O(T²), KV per-step is O(pos):
 
-| | T_SEQ=5 | T_SEQ=16 (from demo) |
+| | T_SEQ=5 (bench) | T_SEQ=16 (demo) |
 |---|---:|---:|
-| FFI full-forward | 20 ms / forward | 56 ms / forward |
-| FFI KV decode | 22 ms / step (mean) | 7.4 ms / step |
+| FFI-CPU full-forward | 20 ms / forward | 56 ms / forward |
+| FFI-CPU KV decode | 22 ms / step (mean) | 7.4 ms / step |
+| FFI-CUDA full-forward | 7 ms / forward | (n/a yet) |
+| FFI-CUDA KV decode | 6.2 ms / step (mean) | 5.6 ms / step |
 
-At T_SEQ=16 KV is ~8× faster; the gap widens further as T grows.
+At T_SEQ=16 CPU KV is ~8× faster than CPU full-forward; CUDA KV
+holds steady at ~6 ms regardless of T (per-step decode is O(pos)
+but the constant is small at this model size).
 
 ## File map
 
@@ -87,24 +127,31 @@ At T_SEQ=16 KV is ~8× faster; the gap widens further as T grows.
 │   └── parity.py                       HF reference logits + compare
 │
 ├── lib/
-│   ├── gpt2.rb           GPT2LM + GPT2Block (native, inference-only)
-│   ├── gpt2_ffi.rb       GPT2FullForwardFFICache (full-forward FFI)
-│   ├── gpt2_ffi_kv.rb    GPT2KVFFICache (per-step KV-cache FFI)
-│   └── gguf_load.rb      Read GGUF tensors into a GPT2LM
+│   ├── gpt2.rb              GPT2LM + GPT2Block (native, inference-only)
+│   ├── gpt2_ffi.rb          GPT2FullForwardFFICache (full-fwd, CPU)
+│   ├── gpt2_ffi_kv.rb       GPT2KVFFICache (per-step KV cache, CPU)
+│   ├── gpt2_ffi_cuda.rb     GPT2FullForwardFFICacheCuda (full-fwd, CUDA)
+│   ├── gpt2_ffi_kv_cuda.rb  GPT2KVFFICacheCuda (per-step KV cache, CUDA)
+│   └── gguf_load.rb         Read GGUF tensors into a GPT2LM
 │
 ├── tinynn/
-│   ├── gguf_inspect.rb       List every tensor in a GGUF via FFI
-│   ├── gpt2_build_smoke.rb   Toy-shape forward smoke
-│   ├── gpt2_load_smoke.rb    Sentinel-value loader check
-│   ├── gpt2_parity.rb        Native parity dump
-│   ├── gpt2_ffi_parity.rb    Full-forward parity dump
-│   ├── gpt2_kv_parity.rb     KV-cache parity dump
-│   ├── kv_multi_cpy_smoke.rb 8-position single-head KV smoke
-│   └── gpt2_bench.rb         Native vs FFI vs KV bench
+│   ├── gguf_inspect.rb        List every tensor in a GGUF via FFI
+│   ├── gpt2_build_smoke.rb    Toy-shape forward smoke
+│   ├── gpt2_load_smoke.rb     Sentinel-value loader check
+│   ├── gpt2_parity.rb         Native parity dump
+│   ├── gpt2_ffi_parity.rb     CPU full-forward parity dump
+│   ├── gpt2_kv_parity.rb      CPU KV-cache parity dump
+│   ├── gpt2_ffi_parity_cuda.rb CUDA full-forward parity dump
+│   ├── gpt2_kv_parity_cuda.rb  CUDA KV-cache parity dump
+│   ├── kv_multi_cpy_smoke.rb  8-position single-head KV smoke
+│   ├── gpt2_bench.rb          Native vs FFI vs KV bench (CPU)
+│   └── gpt2_bench_cuda.rb     Same on CUDA
 │
-├── distilgpt2_demo.rb       End-to-end generation (native)
-├── distilgpt2_demo_ffi.rb   End-to-end generation (full-forward FFI)
-└── distilgpt2_demo_kv.rb    End-to-end generation (KV-cache FFI)
+├── distilgpt2_demo.rb           End-to-end generation (native)
+├── distilgpt2_demo_ffi.rb       End-to-end generation (full-fwd, CPU)
+├── distilgpt2_demo_kv.rb        End-to-end generation (KV, CPU)
+├── distilgpt2_demo_ffi_cuda.rb  End-to-end generation (full-fwd, CUDA)
+└── distilgpt2_demo_kv_cuda.rb   End-to-end generation (KV, CUDA)
 ```
 
 ## Architecture notes
@@ -246,20 +293,62 @@ for the long-form note.
   uses 32, demo uses 32. Larger contexts work but allocate more
   K/V memory per (block, head).
 
-## Next: CUDA on gx10
+## CUDA path on gx10 (NVIDIA GB10): done
 
-`lib/tinynn_cuda.rb` and the existing `*_cuda` smokes establish the
-pattern. Plan:
+`lib/gpt2_ffi_cuda.rb` and `lib/gpt2_ffi_kv_cuda.rb` are 1:1 mirrors
+of the CPU variants against the `TinyNNCuda` module. Class names
+are suffixed `Cuda` per the existing `lib/tinynn_cuda.rb` pattern
+(distinct from CPU classes to avoid Spinel's same-class-twice path,
+since both modules end up loaded transitively via
+`lib/transformer.rb`).
 
-1. `make setup-ggml-cuda` on gx10 (already builds against ggml's
-   CUDA backend with the Mac-build OpenMP/Accelerate flags
-   harmless on Linux).
-2. New `lib/gpt2_ffi_cuda.rb` mirroring `gpt2_ffi.rb` against the
-   `TinyNNCuda` module (same op surface; differences are limited
-   to backend selection and the CUDA-specific link flags).
-3. Bench against the M2 Air FFI-CPU numbers and against PyTorch on
-   the same hardware.
+Generated by a Python regex pass from the CPU originals — the
+class/module names, `TinyNN.` → `TinyNNCuda.`, and the
+`tnn_session_new(0)` → `tnn_session_new(1)` flip (prefer-CUDA
+backend) are the only differences. One hand edit on top: added
+`tnn_add_to_graph` to `lib/tinynn_cuda.rb`'s `ffi_func` list, plus
+an upload_int_array anchor block parallel to the one in
+`lib/tinynn.rb` (Spinel needs the anchor to pin the `indices` param
+type to `Array<Int>`, otherwise it defaults to `mrb_int` and the
+`:int_array` FFI spec's `indices->data` access fails to compile).
 
-Existing CUDA mirrors (`ab_smoke_cuda`, `ab_smoke_all_cuda`,
-`persistent_bench_cuda`) prove ggml-CUDA composes with the project's
-FFI primitives. Mostly mechanical from here.
+Build + run pattern:
+
+```sh
+# On gx10 (NVIDIA GB10):
+make setup-ggml-cuda                              # one-time
+make gpt2-ffi-parity-cuda                         # parity probe
+make gpt2-kv-parity-cuda                          # KV parity probe
+make gpt2-bench-cuda                              # bench
+make distilgpt2_demo_kv_cuda && \
+  ./distilgpt2_demo_kv_cuda                       # end-to-end demo
+```
+
+See the **Bench / gx10** section above for numbers.
+
+## Future directions (smallest-effort first)
+
+- **Quantized GGUF.** Converter produces F32 (327.7 MB); the
+  `tnn_gguf_read_f32_to_doubles` path dequantizes Q4_K/Q8_0/F16 via
+  ggml's `to_float` traits but hasn't been exercised with a real
+  model file. ~4× smaller distilgpt2 on disk, identical arithmetic
+  perf (ggml-cpu still computes in f32).
+
+- **Reading hyperparams from GGUF metadata.** Caller currently
+  hardcodes vocab/d_model/n_heads/etc to match what the converter
+  wrote. Adding `tnn_gguf_kv_get_uint32` would close this.
+
+- **BPE tokenizer in Ruby.** `prep/tokens.py` is a Python shim (HF
+  `tokenizers`, rust-backed). A Ruby BPE encoder would let the
+  Spinel binary be self-contained. ~200 lines + Spinel name-
+  collapse traps.
+
+- **Larger GPT-2 variants.** Same converter handles `--repo-id
+  gpt2[-medium|-large|-xl]`. Memory cost scales linearly in params;
+  gpt2-medium is ~700 MB F32 (RAM-tight on Mac), gpt2-large needs
+  ggx10. CUDA backend would show its advantage at these shapes.
+
+- **Longer contexts.** KV-cache `max_T` parameter caps allocated
+  buffer size; bench uses 32, demo uses 32. Up to 1024 (DistilGPT2 /
+  GPT-2 base context) works with proportionally more memory per
+  (block, head).
