@@ -2,7 +2,7 @@
 
 When two unrelated classes define a same-named accessor that returns different element types, Spinel's whole-program type inference unifies the field's return type to `sp_RbVal`, breaking *every* call site of that field across the program — even sites where the receiver type is statically obvious.
 
-This is the *field-name* counterpart to the local-variable collapse documented in [#XX] (local-var name unification). Same mechanism, different binding form.
+This is the *field-name* counterpart to the local-variable collapse documented in #538 (local-var name unification). Same mechanism, different binding form.
 
 ## Minimal reproduction
 

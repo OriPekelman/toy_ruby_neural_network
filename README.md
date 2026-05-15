@@ -196,8 +196,15 @@ What I filed during the HF GPT-2 work:
 - [matz/spinel#521](https://github.com/matz/spinel/issues/521) —
   stored `0` in `Hash<String, Int>` is indistinguishable from a
   missing key; `Int 0 != nil` evaluates to `false`
+- [matz/spinel#532](https://github.com/matz/spinel/issues/532) —
+  `String#index` returns `-1` instead of `nil` when not found
+- [matz/spinel#537](https://github.com/matz/spinel/issues/537) —
+  same-named accessor returning different types collapses to `sp_RbVal`
+- [matz/spinel#538](https://github.com/matz/spinel/issues/538) —
+  local variable / param with the same name in unrelated methods
+  collapses types to `sp_RbVal`
 
-Drafts for both are in [`docs/spinel-issues/`](docs/spinel-issues).
+Drafts for all five are in [`docs/spinel-issues/`](docs/spinel-issues).
 
 Still open from the training-era work:
 
