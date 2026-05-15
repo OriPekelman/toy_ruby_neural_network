@@ -118,6 +118,7 @@ module TinyNNCuda
   ffi_func :tnn_get_rows,         [:ptr, :ptr, :ptr],       :ptr
   ffi_func :tnn_get_rows_back,    [:ptr, :ptr, :ptr, :ptr], :ptr
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int
+  ffi_func :tnn_add_to_graph,     [:ptr, :ptr],             :int
   ffi_func :tnn_compute,          [:ptr],                   :int
   ffi_func :tnn_scratch_set,      [:ptr, :int, :double],    :void
   ffi_func :tnn_scratch_get,      [:ptr, :int],             :double

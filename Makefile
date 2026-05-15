@@ -368,6 +368,39 @@ gpt2-kv-parity: tinynn/gpt2_kv_parity
 tinynn/gpt2_kv_parity: tinynn/gpt2_kv_parity.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi_kv.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/gpt2_kv_parity.rb -o tinynn/gpt2_kv_parity
 
+# --- CUDA mirrors of the GPT-2 demos / parity / bench --------------
+# All require `make setup-ggml-cuda` to have produced
+# vendor/ggml/build-cuda first. Built on the gx10 (NVIDIA GB10);
+# the Mac build doesn't have CUDA.
+
+CUDA_GPT2_DEPS = lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb \
+                 lib/training.rb lib/tinynn.rb lib/tinynn_cuda.rb \
+                 tinynn/libtinynn_ggml_cuda.a
+
+distilgpt2_demo_ffi_cuda: distilgpt2_demo_ffi_cuda.rb lib/gpt2_ffi_cuda.rb $(CUDA_GPT2_DEPS)
+	$(SPINEL) $< -o $@
+
+distilgpt2_demo_kv_cuda: distilgpt2_demo_kv_cuda.rb lib/gpt2_ffi_kv_cuda.rb $(CUDA_GPT2_DEPS)
+	$(SPINEL) $< -o $@
+
+gpt2-ffi-parity-cuda: tinynn/gpt2_ffi_parity_cuda
+	./tinynn/gpt2_ffi_parity_cuda
+
+tinynn/gpt2_ffi_parity_cuda: tinynn/gpt2_ffi_parity_cuda.rb lib/gpt2_ffi_cuda.rb $(CUDA_GPT2_DEPS)
+	$(SPINEL) tinynn/gpt2_ffi_parity_cuda.rb -o tinynn/gpt2_ffi_parity_cuda
+
+gpt2-kv-parity-cuda: tinynn/gpt2_kv_parity_cuda
+	./tinynn/gpt2_kv_parity_cuda
+
+tinynn/gpt2_kv_parity_cuda: tinynn/gpt2_kv_parity_cuda.rb lib/gpt2_ffi_kv_cuda.rb $(CUDA_GPT2_DEPS)
+	$(SPINEL) tinynn/gpt2_kv_parity_cuda.rb -o tinynn/gpt2_kv_parity_cuda
+
+gpt2-bench-cuda: tinynn/gpt2_bench_cuda
+	./tinynn/gpt2_bench_cuda
+
+tinynn/gpt2_bench_cuda: tinynn/gpt2_bench_cuda.rb lib/gpt2_ffi_cuda.rb lib/gpt2_ffi_kv_cuda.rb $(CUDA_GPT2_DEPS)
+	$(SPINEL) tinynn/gpt2_bench_cuda.rb -o tinynn/gpt2_bench_cuda
+
 ab-smoke-embed: tinynn/ab_smoke_embed
 	./tinynn/ab_smoke_embed
 

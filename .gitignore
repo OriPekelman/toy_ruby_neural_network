@@ -80,3 +80,10 @@ tinynn/kv_multi_cpy_smoke
 tinynn/gpt2_kv_parity
 data/ours_kv_logits.txt
 distilgpt2_demo_kv
+distilgpt2_demo_ffi_cuda
+distilgpt2_demo_kv_cuda
+tinynn/gpt2_ffi_parity_cuda
+tinynn/gpt2_kv_parity_cuda
+tinynn/gpt2_bench_cuda
+data/ours_ffi_cuda_logits.txt
+data/ours_kv_cuda_logits.txt
