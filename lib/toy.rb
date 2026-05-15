@@ -256,9 +256,106 @@ module Toy
   end
 
   # =========================================================================
+  # Toy::RMSNorm — root-mean-square LayerNorm. No mean subtraction, no
+  # beta. Standard in llama-family models.
+  #
+  #   y = x / sqrt(mean(x^2) + eps) * gamma   (row-wise)
+  # =========================================================================
+  class RMSNorm
+    attr_accessor :gamma, :d, :eps
+
+    # eps defaults to 1.0e-5 (matches Llama / SmolLM2). Override via
+    # `rms.eps = ...` after construction — seeding the ivar with a Float
+    # literal pins Spinel's type inference.
+    def initialize(d)
+      @d     = d
+      @eps   = 1.0e-5
+      @gamma = Array.new(d, 1.0)
+    end
+
+    # x: [T, D] → [T, D]
+    def call(x)
+      t   = x.nrows
+      d   = @d
+      out = Mat.new(t, d)
+      i = 0
+      while i < t
+        sumsq = 0.0
+        j = 0
+        while j < d
+          v = x.flat[i * d + j]
+          sumsq = sumsq + v * v
+          j += 1
+        end
+        inv = 1.0 / Math.sqrt(sumsq / d + @eps)
+        j = 0
+        while j < d
+          out.flat[i * d + j] = x.flat[i * d + j] * inv * @gamma[j]
+          j += 1
+        end
+        i += 1
+      end
+      out
+    end
+  end
+
+  # =========================================================================
+  # Toy::SwiGLU — gated FFN used by Llama / SmolLM2 / Qwen2 / Phi.
+  #
+  #   gate(x) = x · W_gate       up(x) = x · W_up
+  #   y       = (silu(gate(x)) * up(x)) · W_down
+  #
+  # Three linear layers, no bias by default (llama convention). Element-
+  # wise multiply between silu(gate) and up before the down projection.
+  # =========================================================================
+  class SwiGLU
+    attr_accessor :w_gate, :w_up, :w_down, :d_model, :d_ff
+
+    def initialize(d_model, d_ff)
+      @d_model = d_model
+      @d_ff    = d_ff
+      @w_gate  = Mat.new(d_model, d_ff)
+      @w_up    = Mat.new(d_model, d_ff)
+      @w_down  = Mat.new(d_ff,    d_model)
+    end
+
+    # x: [T, D] → [T, D]
+    def call(x)
+      gate = x.matmul(@w_gate)              # [T, Df]
+      up   = x.matmul(@w_up)                # [T, Df]
+      Toy.silu!(gate)                       # [T, Df]
+      Toy.hadamard!(gate, up)               # [T, Df]  (gate := gate * up)
+      gate.matmul(@w_down)                  # [T, D]
+    end
+  end
+
+  # =========================================================================
   # Free-standing helpers. These operate on Mat in place where possible
   # so they read like verbs: `causal_mask!`, `add_bias!`, `softmax_rows!`.
   # =========================================================================
+
+  # SiLU activation, in-place. silu(x) = x / (1 + exp(-x)).
+  def self.silu!(m)
+    n = m.nrows * m.ncols
+    i = 0
+    while i < n
+      v = m.flat[i]
+      m.flat[i] = v / (1.0 + Math.exp(-v))
+      i += 1
+    end
+  end
+
+  # Elementwise multiply, into `dst` (dst := dst * src). Both have
+  # identical shape. Param names avoid `a` / `b` to dodge a Spinel
+  # collapse with TinyNN.matmul(a, b) and friends.
+  def self.hadamard!(dst, src)
+    n = dst.nrows * dst.ncols
+    i = 0
+    while i < n
+      dst.flat[i] = dst.flat[i] * src.flat[i]
+      i += 1
+    end
+  end
 
   # x[i, j] += b[j], in-place.
   def self.add_bias!(x, b)

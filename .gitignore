@@ -111,3 +111,4 @@ tep_demo/_tep_lib/
 # Stale local scratch (debugger state, old prep input)
 .rdbgrc.breakpoints
 input.txt
+tinynn/toy_llama_smoke
