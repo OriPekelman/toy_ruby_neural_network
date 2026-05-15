@@ -101,6 +101,53 @@ graph-build overhead. CUDA pulls further ahead at larger models
 contexts, where the matmuls are big enough that GPU parallelism
 matters.
 
+### Quantized GGUF (Q8_0 / Q4_0)
+
+Same converter, add `--quantize q8_0` or `--quantize q4_0`:
+
+```sh
+./prep/convert_distilgpt2_to_gguf.py --repo-id gpt2 --out data/gpt2-q8_0.gguf --quantize q8_0
+./prep/convert_distilgpt2_to_gguf.py --repo-id gpt2 --out data/gpt2-q4_0.gguf --quantize q4_0
+```
+
+Quantizes 2-D weight tensors only — Linear weights for q/k/v/o + ffn_up
++ ffn_down. Token + position embeddings, biases, and LayerNorm
+gammas/betas stay f32 (small + quantizing them hurts more than it
+saves). The existing `tnn_gguf_read_f32_to_doubles` FFI uses ggml's
+type-traits `to_float` to dequantize per-tensor at load time; the rest
+of the project doesn't change.
+
+Size and behaviour on the canonical "Hello, my name is" prompt:
+
+| | distilgpt2 (6 layers) | gpt2-small (12 layers) |
+|---|---|---|
+| F32 GGUF size | 327.7 MB | 497.8 MB |
+| Q8_0 GGUF size | 202.9 MB (1.6×) | 248.3 MB (2.0×) |
+| Q4_0 GGUF size | 181.7 MB (1.8×) | 205.8 MB (2.4×) |
+| F32 generation | "Hello, my name is J.J.K. Rowling." | "Hello, my name is John. I'm a writer, and" |
+| **Q8_0 generation** | "Hello, my name is J.J.J.K." (1 token drift) | **"Hello, my name is John. I'm a writer, and" (identical!)** |
+| Q4_0 generation | (degenerates to loop) | "Hello, my name is J.J. Abrams. I'm" |
+
+**Key result: gpt2-small Q8_0 produces byte-identical generation to
+the F32 reference.** Distilgpt2 is small enough that even Q8_0's ~0.5
+logit-unit noise occasionally flips an argmax; gpt2-small has enough
+parameter redundancy that 8-bit quantization is effectively lossless
+for greedy decode.
+
+Q4_0 is too aggressive for distilgpt2 (model loops) and noticeable on
+gpt2-small (different but coherent continuation). For comfortable
+4-bit you want K-quants (Q4_K_M etc) which gguf-py doesn't have a
+Python implementation of — those need llama.cpp's quantizer or a
+C-side helper wrapping `ggml_quantize_chunk`. Listed as a follow-up.
+
+Per-step cost increase (KV decode, gpt2-small):
+- F32: 11 ms / step
+- Q8_0: 15 ms / step (~35 % overhead from dequant)
+- Q4_0: 12 ms / step (~10 % overhead; simpler dequant kernel)
+
+Q4_0 being *faster* than Q8_0 is counter-intuitive but plausible —
+fewer bytes through memory, fits more of the working set in cache.
+
 ### gpt2-small (124 M, 12 layers) — bigger model on both backends
 
 Switching the demo's `GGUF` constant from `data/distilgpt2-f32.gguf`
