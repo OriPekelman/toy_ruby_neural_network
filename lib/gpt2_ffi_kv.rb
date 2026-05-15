@@ -340,4 +340,5 @@ module GPT2KV
     # layout as a single-row Mat with vocab columns.
     TinyNN.download_row_major(kv_cache.sess, step.kv_step_logits, 1, kv_cache.vocab_size)
   end
+
 end

@@ -87,3 +87,10 @@ tinynn/gpt2_kv_parity_cuda
 tinynn/gpt2_bench_cuda
 data/ours_ffi_cuda_logits.txt
 data/ours_kv_cuda_logits.txt
+data/gpt2-bpe-vocab.tsv
+data/gpt2-bpe-merges.tsv
+data/gpt2-bpe-bytechars.tsv
+data/prompt.txt
+distilgpt2_demo_text
+tinynn/bpe_smoke
+tinynn/bpe_debug

@@ -336,6 +336,11 @@ distilgpt2_demo_ffi: distilgpt2_demo_ffi.rb lib/transformer.rb lib/gpt2.rb lib/g
 distilgpt2_demo_kv: distilgpt2_demo_kv.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi_kv.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
+# Fully self-contained variant: Ruby BPE encode/decode in-process.
+# Reads a text prompt from data/prompt.txt; no Python at runtime.
+distilgpt2_demo_text: distilgpt2_demo_text.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi_kv.rb lib/gguf_load.rb lib/bpe.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
 # Parity probe: one forward at distilgpt2 shape, dump last-row logits
 # to data/ours_logits.txt. Pair with prep/parity.py for the HF reference.
 gpt2-parity: tinynn/gpt2_parity
@@ -359,6 +364,14 @@ gpt2-bench: tinynn/gpt2_bench
 
 tinynn/gpt2_bench: tinynn/gpt2_bench.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi.rb lib/gpt2_ffi_kv.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/gpt2_bench.rb -o tinynn/gpt2_bench
+
+# Ruby BPE smoke: load vocab/merges, encode + roundtrip-decode some
+# fixed prompts. Compare against prep/tokens.py output.
+bpe-smoke: tinynn/bpe_smoke
+	./tinynn/bpe_smoke
+
+tinynn/bpe_smoke: tinynn/bpe_smoke.rb lib/transformer.rb lib/bpe.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tinynn/bpe_smoke.rb -o tinynn/bpe_smoke
 
 # KV-cache parity probe: prefill the prompt one token at a time through
 # GPT2KVFFICache, dump last-position logits.

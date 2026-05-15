@@ -632,22 +632,29 @@ int tnn_reset_for_rebuild(void *sess)
 {
     if (!sess) return -1;
     tnn_session *s = (tnn_session *)sess;
-    if (s->ctx) {
+    /* Profile timing showed that free()+init() of the (now 130-ish MB)
+     * ctx_buf adds ~500 ms per call — dominates compute. So we ONLY
+     * teardown when the ctx is approaching capacity. The (small)
+     * accumulated dead headers between teardowns are bounded by
+     * ctx_used / ctx_buf_size, which we check before each rebuild
+     * via ggml_used_mem.
+     *
+     * Threshold: half the buffer. Headroom ensures the *next* step's
+     * graph build can complete without overflowing. */
+    size_t used = ggml_used_mem(s->ctx);
+    if (used > s->ctx_buf_size / 2) {
         ggml_free(s->ctx);
+        struct ggml_init_params params = {
+            /*.mem_size   =*/ s->ctx_buf_size,
+            /*.mem_buffer =*/ s->ctx_buf,
+            /*.no_alloc   =*/ true,
+        };
+        s->ctx        = ggml_init(params);
+        s->graph_b    = ggml_new_graph_custom(s->ctx, 16384, false);
+        s->realized_b = 0;
     }
-    struct ggml_init_params params = {
-        /*.mem_size   =*/ s->ctx_buf_size,
-        /*.mem_buffer =*/ s->ctx_buf,
-        /*.no_alloc   =*/ true,
-    };
-    s->ctx      = ggml_init(params);
     s->realized = 0;
-    /* Must match the size used in tnn_session_new — see comment there. */
     s->graph    = ggml_new_graph_custom(s->ctx, 16384, false);
-    /* graph_b is the secondary cgraph used by some training paths
-     * (ab_smoke_dual_graph). Recreate so its pointer stays valid. */
-    s->graph_b    = ggml_new_graph_custom(s->ctx, 16384, false);
-    s->realized_b = 0;
     s->last_graph = 0;
     return 0;
 }
