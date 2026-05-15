@@ -18,12 +18,12 @@ GGUF = "data/distilgpt2-f32.gguf"
 ext  = GPT2ConfigLoader.read(GGUF)
 cfg  = Toy::GPT2Config.new(ext.vocab_size, ext.d_model, ext.n_heads,
                            ext.d_ff, ext.n_layers, ext.context_length)
-puts "config: v=" + cfg.vocab.to_s + " d=" + cfg.d_model.to_s +
-     " h=" + cfg.n_heads.to_s + " L=" + cfg.n_layers.to_s
-
 # --- build + load ----
 model = Toy::GPT2.new(cfg)
 GGUFLoad.load_toy_gpt2(model, GGUF)
+puts ""
+puts model.describe
+puts ""
 
 # --- read prompt ids ----
 raw = ["?"]

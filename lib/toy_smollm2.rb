@@ -66,6 +66,11 @@ module Toy
       x.add!(@l_ffn.forward(@rn2.forward(x)))               # residual after FFN
       x
     end
+
+    def param_count
+      @rn1.param_count + @rn2.param_count +
+        @l_attn.param_count + @l_ffn.param_count
+    end
   end
 
   # SmolLM2 / generic llama-family decoder LM.
@@ -105,6 +110,44 @@ module Toy
       end
       x_final = @l_final_norm.forward(x)                     # [T, D]
       x_final.matmul_t(@l_token_embed.weight)                # [T, V]  (tied)
+    end
+
+    # Total trainable parameter count (tied embeddings counted once).
+    def param_count
+      total = @l_token_embed.param_count + @l_final_norm.param_count
+      li = 0
+      while li < @l_cfg.n_layers
+        total = total + @l_stack[li].param_count
+        li += 1
+      end
+      total
+    end
+
+    # Build a multi-line description of the architecture and return
+    # it as a String. Caller does `puts model.describe`.
+    def describe
+      sblk0 = @l_stack[0]
+      s = "Toy::SmolLM2 (" + Toy.fmt_count(param_count) + " params)\n"
+      s = s + "  config: vocab=" + @l_cfg.vocab.to_s
+      s = s + " d_model=" + @l_cfg.d_model.to_s
+      s = s + " n_heads=" + @l_cfg.n_heads.to_s
+      s = s + " n_kv=" + @l_cfg.n_kv.to_s
+      s = s + " d_ff=" + @l_cfg.d_ff.to_s
+      s = s + " n_layers=" + @l_cfg.n_layers.to_s
+      s = s + " ctx=" + @l_cfg.ctx.to_s
+      s = s + " rope_base=" + @l_cfg.rope_base.to_s + "\n"
+      s = s + "  l_token_embed: " + @l_token_embed.summary
+      s = s + "  [" + Toy.fmt_count(@l_token_embed.param_count) + "]\n"
+      s = s + "  l_rope:        " + @l_rope.summary + "\n"
+      s = s + "  l_stack: " + @l_cfg.n_layers.to_s + " × SmolLM2Block\n"
+      s = s + "    rn1:    " + sblk0.rn1.summary + "\n"
+      s = s + "    l_attn: " + sblk0.l_attn.summary + "\n"
+      s = s + "    rn2:    " + sblk0.rn2.summary + "\n"
+      s = s + "    l_ffn:  " + sblk0.l_ffn.summary + "\n"
+      s = s + "    (per-block params: " + Toy.fmt_count(sblk0.param_count) + ")\n"
+      s = s + "  l_final_norm: " + @l_final_norm.summary + "\n"
+      s = s + "  unembed: tied to l_token_embed (logits = x · l_token_embed.T)"
+      s
     end
   end
 end

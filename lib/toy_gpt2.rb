@@ -46,8 +46,13 @@ module Toy
     # x: [T, D] → [T, D]
     def forward(x)
       x.add!(@g_attn.forward(@ln1.forward(x)))    # residual after attention
-      x.add!(@ffn.forward(@ln2.forward(x)))     # residual after FFN
+      x.add!(@ffn.forward(@ln2.forward(x)))       # residual after FFN
       x
+    end
+
+    def param_count
+      @ln1.param_count + @ln2.param_count +
+        @g_attn.param_count + @ffn.param_count
     end
   end
 
@@ -89,6 +94,44 @@ module Toy
 
       x_final = @final_norm.forward(x)                              # [T, D]
       x_final.matmul_t(@token_embed.weight)                      # [T, V]
+    end
+
+    # Total trainable parameter count. Tied embeddings counted once.
+    def param_count
+      total = @token_embed.param_count + @pos_embed.param_count +
+              @final_norm.param_count
+      li = 0
+      while li < @cfg.n_layers
+        total = total + @stack[li].param_count
+        li += 1
+      end
+      total
+    end
+
+    # Build a multi-line description of the architecture and return
+    # it as a String. Caller does `puts model.describe`.
+    def describe
+      blk0 = @stack[0]
+      s = "Toy::GPT2 (" + Toy.fmt_count(param_count) + " params)\n"
+      s = s + "  config: vocab=" + @cfg.vocab.to_s
+      s = s + " d_model=" + @cfg.d_model.to_s
+      s = s + " n_heads=" + @cfg.n_heads.to_s
+      s = s + " d_ff=" + @cfg.d_ff.to_s
+      s = s + " n_layers=" + @cfg.n_layers.to_s
+      s = s + " ctx=" + @cfg.ctx.to_s + "\n"
+      s = s + "  token_embed: " + @token_embed.summary
+      s = s + "  [" + Toy.fmt_count(@token_embed.param_count) + "]\n"
+      s = s + "  pos_embed:   " + @pos_embed.summary
+      s = s + "  [" + Toy.fmt_count(@pos_embed.param_count) + "]\n"
+      s = s + "  stack: " + @cfg.n_layers.to_s + " × GPT2Block\n"
+      s = s + "    ln1:    " + blk0.ln1.summary + "\n"
+      s = s + "    g_attn: " + blk0.g_attn.summary + "\n"
+      s = s + "    ln2:    " + blk0.ln2.summary + "\n"
+      s = s + "    ffn:    " + blk0.ffn.summary + "\n"
+      s = s + "    (per-block params: " + Toy.fmt_count(blk0.param_count) + ")\n"
+      s = s + "  final_norm: " + @final_norm.summary + "\n"
+      s = s + "  unembed: tied to token_embed (logits = x · token_embed.T)"
+      s
     end
   end
 end

@@ -72,6 +72,9 @@ module Toy
       end
       out
     end
+
+    def summary;     "LayerNorm(d=" + @d.to_s + ", eps=" + @eps.to_s + ")"; end
+    def param_count; 2 * @d; end   # gamma + beta
   end
 
   # =========================================================================
@@ -96,6 +99,18 @@ module Toy
         Toy.add_bias!(out, @b)
       end
       out
+    end
+
+    def summary
+      bs = @has_bias ? "true" : "false"
+      "Linear(in=" + @in_dim.to_s + ", out=" + @out_dim.to_s + ", bias=" + bs + ")"
+    end
+    def param_count
+      n = @in_dim * @out_dim
+      if @has_bias
+        n = n + @out_dim
+      end
+      n
     end
   end
 
@@ -146,6 +161,9 @@ module Toy
       end
       out
     end
+
+    def summary;     "Embedding(vocab=" + @vocab.to_s + ", d=" + @d.to_s + ")"; end
+    def param_count; @vocab * @d; end
   end
 
   # =========================================================================
@@ -223,6 +241,16 @@ module Toy
       Toy.softmax_rows!(scores)
       scores.matmul(v)                    # [T, Dh]
     end
+
+    def summary
+      "CausalSelfAttention(d_model=" + @d_model.to_s +
+        ", heads=" + @n_heads.to_s + ", d_head=" + @d_head.to_s + ")"
+    end
+    def param_count
+      # n_heads × (d_model * d_head + d_head) for Q/K/V, plus d_model² + d_model for W_o + b_o
+      per_head = (@d_model * @d_head + @d_head) * 3
+      per_head * @n_heads + @d_model * @d_model + @d_model
+    end
   end
 
   # =========================================================================
@@ -252,6 +280,14 @@ module Toy
       out = hidden.matmul(@w2)            # [T, D]
       Toy.add_bias!(out, @b2)
       out
+    end
+
+    def summary
+      "FFN(d=" + @d_model.to_s + ", hidden=" + @d_ff.to_s + ", act=" + @act.to_s + ")"
+    end
+    def param_count
+      @d_model * @d_ff + @d_ff +     # W1 + b1
+        @d_ff * @d_model + @d_model  # W2 + b2
     end
   end
 
@@ -297,6 +333,9 @@ module Toy
       end
       out
     end
+
+    def summary;     "RMSNorm(d=" + @d.to_s + ", eps=" + @eps.to_s + ")"; end
+    def param_count; @d; end   # gamma only
   end
 
   # =========================================================================
@@ -326,6 +365,14 @@ module Toy
       Toy.silu!(gate)                       # [T, Df]
       Toy.hadamard!(gate, up)               # [T, Df]  (gate := gate * up)
       gate.matmul(@w_down)                  # [T, D]
+    end
+
+    def summary
+      "SwiGLU(d=" + @d_model.to_s + ", d_ff=" + @d_ff.to_s + ")"
+    end
+    def param_count
+      # 3 × (d_model × d_ff) — no biases (llama convention).
+      3 * @d_model * @d_ff
     end
   end
 
@@ -395,6 +442,11 @@ module Toy
         i += 1
       end
     end
+
+    def summary
+      "RoPE(d_head=" + @d_head.to_s + ", max_seq=" + @max_seq.to_s + ")"
+    end
+    def param_count; 0; end   # cos/sin tables are precomputed, not learned
   end
 
   # =========================================================================
@@ -482,6 +534,18 @@ module Toy
       Toy.softmax_rows!(scores)
       scores.matmul(v_h)                       # [T, Dh]
     end
+
+    def summary
+      "GQAttention(d=" + @d_model.to_s +
+        ", n_q=" + @n_heads.to_s + ", n_kv=" + @n_kv.to_s +
+        ", d_head=" + @d_head.to_s + ", group=" + @group_size.to_s + ")"
+    end
+    def param_count
+      # Q: n_heads × (d_model × d_head). K/V: n_kv × (d_model × d_head). O: d_model²
+      @n_heads * @d_model * @d_head +
+        2 * @n_kv * @d_model * @d_head +
+        @d_model * @d_model
+    end
   end
 
   # =========================================================================
@@ -497,6 +561,42 @@ module Toy
       v = m.flat[i]
       m.flat[i] = v / (1.0 + Math.exp(-v))
       i += 1
+    end
+  end
+
+  # Print a labelled shape line and return the Mat unchanged. Useful
+  # to drop in the middle of a forward pass:
+  #
+  #   x = Toy.tap("after attn", @attn.forward(@ln1.forward(x)))
+  #
+  # (Implemented with separate puts/print calls to dodge a Spinel quirk
+  # where chained String + Mat#shape concat fails to compile.)
+  def self.tap(label, x)
+    print label
+    print ": Mat"
+    puts x.shape
+    x
+  end
+
+  # Like `tap` but with min/max/mean stats — for "is this drifting?"
+  # sanity checks during inference.
+  def self.tap_info(label, x)
+    print label
+    print ": "
+    puts x.info
+    x
+  end
+
+  # Pretty-format a parameter count: 49,152 → "49.2K"; 1_233_000 → "1.2M".
+  def self.fmt_count(n)
+    if n >= 1_000_000_000
+      (n.to_f / 1_000_000_000.0).round(2).to_s + "B"
+    elsif n >= 1_000_000
+      (n.to_f / 1_000_000.0).round(2).to_s + "M"
+    elsif n >= 1_000
+      (n.to_f / 1_000.0).round(1).to_s + "K"
+    else
+      n.to_s
     end
   end
 

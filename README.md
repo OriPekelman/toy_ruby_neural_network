@@ -4,79 +4,155 @@
   <img src="toy_logo.png" alt="toy" width="240" />
 </p>
 
-Decoder-only transformer LM in Ruby, AOT-compiled to a native binary
-by [Spinel](https://github.com/matz/spinel) (matz's Ruby AOT
-compiler). Two stories live in one repo:
+A small transformer language model in Ruby. It compiles to a native
+binary (via [Spinel](https://github.com/matz/spinel), matz's Ruby AOT
+compiler) and runs real, downloadable HuggingFace models — GPT-2 and
+SmolLM2-135M — at output-identical fidelity to PyTorch.
 
-1. **From-scratch training.** ~700 lines of readable Ruby — `Mat`,
-   `Block`, `TransformerLM`, forward, backward, Adam — trained on a
-   slice of TinyStories. The project's original purpose.
-2. **Real HF model inference.** DistilGPT2 and GPT-2 (124M…) load
-   from `.gguf`, run on CPU and CUDA via an FFI bridge to
-   [ggml](https://github.com/ggml-org/ggml), tokenize and detokenize
-   in pure Ruby BPE, and produce byte-identical output to PyTorch
-   `transformers`. See [HF_GPT2.md](HF_GPT2.md).
+The project's goal is to be **readable**: the whole forward pass of a
+transformer fits on one screen, every shape is annotated inline, and
+the building blocks are named after the math.
 
-```sh
-# 30-second tour: real-model inference, self-contained binary.
-make setup-ggml                                          # build ggml CPU (~30 s)
-./prep/convert_distilgpt2_to_gguf.py --repo-id gpt2 \    # HF → GGUF (~30 s)
-                                    --out data/gpt2-f32.gguf
-./prep/dump_bpe.py                                       # vocab/merges → TSV
-echo "Once upon a time, in a quiet village by the sea" > data/prompt.txt
-make distilgpt2_demo_text && ./demos/distilgpt2_demo_text
-# → "Once upon a time, in a quiet village by the sea, there lived a
-#    curious child named Nana. She was a young girl of about five years
-#    old, and she was very curious..."
+```ruby
+# lib/toy_smollm2.rb — the SmolLM2 block, in full.
+def forward(x, pos_start)
+  x.add!(@l_attn.forward(@rn1.forward(x), pos_start))   # residual after attention
+  x.add!(@l_ffn.forward(@rn2.forward(x)))               # residual after FFN
+  x
+end
 ```
 
-No Python at runtime. GGUF model + three BPE TSVs + a 1.1 MB native
-binary. ~14 ms/token KV-decode at distilgpt2 shape on an M2 Air.
+If you can read that, you can read the whole model.
+
+## Quickstart
+
+You'll need a Ruby installation, a checked-out copy of
+[Spinel](https://github.com/matz/spinel) at `~/sites/spinel`, and a C
+compiler. `uv` (for the conversion scripts) installs itself if you
+have it; if not, `pip install uv` first.
+
+```sh
+# One-time: clone + build ggml (the underlying math library) and convert
+# SmolLM2-135M from HuggingFace into our native model file.
+make setup-ggml                              # ~30 s
+./prep/convert_smollm2_to_gguf.py            # ~30 s, writes data/smollm2-135m-f32.gguf
+./prep/smollm2_tokens.py encode "Once upon a time"
+
+# Build and run.
+make smollm2_pleasant
+./demos/smollm2_pleasant
+
+./prep/smollm2_tokens.py decode
+# → "Once upon a time, there was a little girl named Lily"
+```
+
+The model is real (135M parameters, downloaded from HuggingFace) and
+the output is byte-identical to what PyTorch produces on the same
+prompt.
+
+## What you'll see when you run it
+
+`./demos/smollm2_pleasant` prints, before generating:
+
+```
+Toy::SmolLM2 (134.52M params)
+  config: vocab=49152 d_model=576 n_heads=9 n_kv=3 d_ff=1536 n_layers=30 ctx=8192 rope_base=100000
+  l_token_embed: Embedding(vocab=49152, d=576)  [28.31M]
+  l_rope:        RoPE(d_head=64, max_seq=8192)
+  l_stack: 30 × SmolLM2Block
+    rn1:    RMSNorm(d=576, eps=1e-5)
+    l_attn: GQAttention(d=576, n_q=9, n_kv=3, d_head=64, group=3)
+    rn2:    RMSNorm(d=576, eps=1e-5)
+    l_ffn:  SwiGLU(d=576, d_ff=1536)
+    (per-block params: 3.54M)
+  l_final_norm: RMSNorm(d=576, eps=1e-5)
+  unembed: tied to l_token_embed (logits = x · l_token_embed.T)
+```
+
+That's the entire architecture. Each line you can click through to
+the corresponding ~40-line Ruby class in `lib/toy.rb`.
+
+## Introspection
+
+Every `Mat` (the 2D float tensor type) knows its shape and can
+describe itself:
+
+```ruby
+x.shape         # → "[5, 768]"
+x.info          # → "Mat[5, 768] min=-2.34 max=1.97 mean=0.012"
+```
+
+Every layer reports a one-line summary and its parameter count:
+
+```ruby
+puts ffn.summary       # → "FFN(d=768, hidden=3072, act=gelu_new)"
+puts ffn.param_count   # → 4,722,432
+```
+
+Every model has `.describe` (the block shown above is the output).
+
+To peek mid-forward at a tensor without breaking flow:
+
+```ruby
+x = Toy.tap("after attn", @attn.forward(@ln1.forward(x)))
+# prints "after attn: Mat[5, 768]" and passes x through.
+```
+
+## A guided tour of the code
+
+If you're new to transformers, here's what each piece in the
+`describe` output means and where it lives in code:
+
+| Name | What it does | Where |
+|---|---|---|
+| `Embedding` | Turns integer token IDs into vectors (rows of a big lookup table). | [`lib/toy.rb`](lib/toy.rb) |
+| `RMSNorm` / `LayerNorm` | Normalizes a row's values so training stays stable. | [`lib/toy.rb`](lib/toy.rb) |
+| `RoPE` | Encodes "where is this token in the sequence" by rotating Q/K vectors. | [`lib/toy.rb`](lib/toy.rb) |
+| `CausalSelfAttention` / `GQAttention` | The attention mechanism: each token decides which earlier tokens to look at. | [`lib/toy.rb`](lib/toy.rb) |
+| `FFN` / `SwiGLU` | A two-layer feedforward network with a nonlinearity in the middle. | [`lib/toy.rb`](lib/toy.rb) |
+| `GPT2Block` / `SmolLM2Block` | One full layer = pre-norm → attention → residual → pre-norm → FFN → residual. | [`lib/toy_gpt2.rb`](lib/toy_gpt2.rb) / [`lib/toy_smollm2.rb`](lib/toy_smollm2.rb) |
+| `GPT2` / `SmolLM2` | The full model: embed tokens → stack of N blocks → final norm → unembed back to vocab probabilities. | same |
+
+That's it. There's no extra magic. Every shape in every line is
+annotated as a comment.
 
 ## Layout
 
 ```
 .
 ├── lib/
-│   ├── transformer.rb         Mat, Block, TransformerLM, Gradients, AdamState
+│   ├── toy.rb                 Reusable building blocks: LayerNorm, RMSNorm,
+│   │                          Linear, Embedding, CausalSelfAttention,
+│   │                          GQAttention, FFN, SwiGLU, RoPE
+│   ├── toy_gpt2.rb            Toy::GPT2 — full model in ~80 lines
+│   ├── toy_smollm2.rb         Toy::SmolLM2 — SmolLM2 / llama-family in ~110 lines
+│   ├── toy_gpt2_loader.rb     GGUF → Toy::GPT2 weights
+│   ├── toy_smollm2_loader.rb  GGUF → Toy::SmolLM2 weights
+│   ├── toy_trainer.rb         Toy::Trainer — pleasant training loop wrapper
+│   ├── transformer.rb         Mat (2D float tensor) + the from-scratch
+│   │                          TransformerLM with forward + backward + Adam
 │   ├── training.rb            LRSchedule, DataLoader, Adam, corpus readers
-│   ├── gpt2.rb                GPT2LM (inference-only HF-shape transformer)
-│   ├── toy.rb                 Sugar layer: LayerNorm, Linear, Embedding,
-│   │                          CausalSelfAttention, FFN building blocks
-│   ├── toy_gpt2.rb            Toy::GPT2 — same model in ~80 lines
-│   ├── toy_trainer.rb         Toy::Trainer — pleasant training-loop wrapper
-│   ├── gpt2_ffi.rb            FFI full-forward graph (CPU)
-│   ├── gpt2_ffi_kv.rb         FFI KV-cache decode (CPU)
-│   ├── gpt2_ffi_cuda.rb       FFI full-forward (CUDA)
-│   ├── gpt2_ffi_kv_cuda.rb    FFI KV-cache decode (CUDA)
-│   ├── gguf_load.rb           GGUF → GPT2LM weight loader + GPT2Config
-│   ├── bpe.rb                 Byte-level BPE encoder + decoder
-│   ├── tinynn.rb              FFI bridge to ggml (CPU): module TinyNN
-│   └── tinynn_cuda.rb         FFI bridge to ggml-cuda: module TinyNNCuda
+│   ├── gguf_load.rb           Generic GGUF read helpers (used by both loaders)
+│   ├── bpe.rb                 Pure-Ruby byte-level BPE (GPT-2's tokenizer)
+│   ├── tinynn.rb              FFI bridge from Ruby to ggml (CPU)
+│   └── tinynn_cuda.rb         FFI bridge to ggml-cuda (GPU)
 ├── demos/                     End-to-end Ruby drivers (one per build target)
-│   ├── train_minimal.rb       Tiny SGD smoke
-│   ├── train_tinystories.rb   From-scratch training entrypoint
-│   ├── distilgpt2_demo.rb     Native Mat (f64) forward
-│   ├── distilgpt2_demo_ffi.rb FFI full-forward (CPU)
-│   ├── distilgpt2_demo_kv.rb  KV-cache decode (CPU)
-│   ├── distilgpt2_demo_text.rb  KV decode + Ruby BPE (text in / out)
-│   └── distilgpt2_demo_{ffi,kv}_cuda.rb   CUDA mirrors
-├── prep/
-│   ├── prep_tinystories.rb    Tokenized corpus for the training path
-│   ├── convert_distilgpt2_to_gguf.py   HF safetensors → GGUF (incl. quants)
-│   ├── dump_bpe.py            Vocab/merges/byte-chars → TSV
-│   ├── tokens.py              Python BPE shim (superseded by lib/bpe.rb)
-│   └── parity.py              HF transformers reference logits + diff
-├── tep_demo/                  Tep-based HTTP server (incl. OpenAI-compatible API)
-├── tinynn/                    C shim (ggml wrappers) + parity / bench smokes
-├── docs/                      Long-form notes (scout, upstream issue drafts)
-└── HF_GPT2.md                 Long-form notes on the HF inference path
+│   ├── smollm2_pleasant.rb    The flagship demo — SmolLM2 via Toy::*
+│   ├── gpt2_pleasant.rb       Same idea, GPT-2 / DistilGPT-2
+│   ├── train_pleasant.rb      Training via Toy::Trainer
+│   ├── distilgpt2_demo*.rb    Older legacy demos (native / FFI / KV / CUDA paths)
+│   ├── train_minimal.rb       Tiny SGD smoke (40 steps)
+│   └── train_tinystories.rb   Full TinyStories training run
+├── prep/                      Host-side Python helpers (model conversion,
+│                              tokenization, parity reference)
+├── tep_demo/                  HTTP server (OpenAI-compatible API) via Tep
+├── tinynn/                    C shim wrapping ggml + per-op parity smokes
+└── docs/                      Long-form notes (scout, upstream issue drafts)
 ```
 
 ## Architecture
 
-Plain pre-norm decoder-only transformer. Two variants live side by
-side in the codebase:
+Plain pre-norm decoder-only transformer. Diagram for one block:
 
 ```
 token_ids ─▶ embed ─▶ [Block]×N ─▶ Norm ─▶ unembed (tied) ─▶ logits
@@ -85,169 +161,146 @@ Block (pre-norm):
     x ─▶ Norm ─▶ multi-head causal attention ─▶ + ─┐
                                                     │
                                   residual ◀────────┘
-    x'─▶ Norm ─▶ FFN (Linear → GeLU → Linear) ─▶ + ─┐
-                                                     │
-                                  residual ◀─────────┘
+    x'─▶ Norm ─▶ FFN (Linear → activation → Linear) ─▶ + ─┐
+                                                           │
+                                  residual ◀──────────────┘
 ```
 
-- `TransformerLM` (`lib/transformer.rb`): from-scratch training-shape
-  model. RMSNorm, no biases, tied embeddings, learned absolute pos
-  embeddings. Forward + backward + Adam all in pure Ruby.
-- `GPT2LM` (`lib/gpt2.rb`): HF-shape inference-only model. LayerNorm
-  with bias, biases on every Linear, GeLU(`gelu_new`), tied
-  embeddings, learned absolute pos. Loads from `.gguf`.
+The model classes:
 
-Bits the two share: pre-norm structure, multi-head causal attention,
-sequential residuals, GeLU, tied output embedding.
+- **`Toy::GPT2`** — HF GPT-2 shape. LayerNorm with bias, biases on
+  every Linear, GeLU FFN, tied embeddings, learned absolute position
+  embeddings.
+- **`Toy::SmolLM2`** — Llama family shape. RMSNorm, no biases, SwiGLU
+  FFN, tied embeddings, RoPE positions, grouped-query attention.
+- **`TransformerLM`** ([`lib/transformer.rb`](lib/transformer.rb)) — older
+  from-scratch training-shape model with Adam + cross-entropy backward
+  in pure Ruby (loosely a Llama-1 stripped down). Used by
+  `demos/train_minimal` and `demos/train_tinystories`.
 
-## The Toy:: sugar layer
+## How fast is it?
 
-`lib/toy.rb` decomposes the same architecture into reusable building
-blocks — `Toy::LayerNorm`, `Toy::Linear`, `Toy::Embedding`,
-`Toy::CausalSelfAttention`, `Toy::FFN`. `lib/toy_gpt2.rb` composes
-them into a `Toy::GPT2` whose `forward` reads like the paper:
+`demos/smollm2_pleasant` is the **native Mat path** — every matmul is
+a plain Ruby double-loop. That's slow but exists so you can read it.
 
-```ruby
-# Toy::GPT2Block — pre-norm, residual after each sublayer.
-def call(x)                              # x: [T, D] → [T, D]
-  x.add!(@attn.call(@ln1.call(x)))       # residual after attention
-  x.add!(@ffn.call(@ln2.call(x)))        # residual after FFN
-  x
-end
+For real inference speed there's a parallel **FFI path** (Ruby drives
+[ggml](https://github.com/ggml-org/ggml) over FFI), CPU + CUDA
+backends. Current numbers (single forward pass, T_SEQ=5):
 
-# Toy::GPT2 — embed → N × block → norm → unembed.
-def call(ids, start_pos)                                   # ids: [T] → logits [T, V]
-  x = @token_embed.lookup(ids)                              # [T, D]
-  x.add!(@pos_embed.slice(start_pos, ids.length))           # [T, D]
-  li = 0
-  while li < @cfg.n_layers
-    x = @stack[li].call(x)                                  # [T, D]
-    li += 1
-  end
-  x_final = @final_norm.call(x)                             # [T, D]
-  x_final.matmul_t(@token_embed.weight)                     # [T, V]
-end
-```
+| Path | gpt2-small per-step |
+|---|---:|
+| `Toy::GPT2` (native Mat, f64) | ~1.7 s |
+| FFI full-forward, CPU | 56 ms |
+| FFI KV-cache, CPU | 14 ms |
+| FFI KV-cache, CUDA (gx10) | 22 ms |
 
-Lines of model code: **312 (`GPT2LM`) → 80 (`Toy::GPT2`)**, byte-identical
-output (`demos/gpt2_pleasant` parity-tested vs `demos/distilgpt2_demo`
-on DistilGPT2).
-
-The training side gets the same treatment in `Toy::Trainer`
-(`lib/toy_trainer.rb`): the per-step `grads.fill_zero → forward →
-backward → optimizer.step` boilerplate collapses to one verb,
-`trainer.step!(seq)`, so the outer epoch / batch / sequence loop
-stays visible in the demo.
-
-See [`demos/gpt2_pleasant.rb`](demos/gpt2_pleasant.rb) and
-[`demos/train_pleasant.rb`](demos/train_pleasant.rb).
-
-## Three forward paths
-
-`make … && ./demos/…` table for the GPT-2 side. The from-scratch
-training path has its own demos (`train_minimal`, `train_tinystories`).
-
-| Demo | What it does | Per-step (gpt2-small, T_SEQ=5) |
-|---|---|---:|
-| `demos/distilgpt2_demo` | Native Mat (f64) forward in pure Ruby | 1.7 s |
-| `demos/distilgpt2_demo_ffi` | FFI full-forward, T_SEQ-padded | 56 ms |
-| `demos/distilgpt2_demo_kv` | FFI persistent KV cache, per-step decode | 14 ms |
-| `demos/distilgpt2_demo_text` | KV cache + Ruby BPE; takes a text prompt | 14 ms |
-| `demos/distilgpt2_demo_kv_cuda` | KV decode via ggml-cuda on gx10 GB10 | 22 ms |
-
-All five produce **identical token sequences** on the same prompt; the
-KV path is parity-verified against HF `transformers`' PyTorch
-reference at F32 ULP precision (`max_abs_diff ≈ 3e-3` on the final
-logits, argmax + top-5 match exactly).
-
-Full numbers in [HF_GPT2.md](HF_GPT2.md). Older training-side
-performance story in [tinynn/README.md](tinynn/README.md).
+All produce identical token sequences; the KV path is parity-verified
+against PyTorch `transformers` at F32 precision. Numbers in
+[`HF_GPT2.md`](HF_GPT2.md). The `Toy::SmolLM2` path is currently
+native-only — the FFI mirror is on the todo list.
 
 ## Quantization
 
-The same converter writes Q8_0 / Q4_0 / Q5_0 GGUFs (legacy
-quantizers via `gguf-py`). The existing `tnn_gguf_read_f32_to_doubles`
-dequantizes via ggml's type-traits — no project changes needed.
+The GPT-2 converter writes Q8_0 / Q4_0 / Q5_0 GGUFs too:
 
 ```sh
 ./prep/convert_distilgpt2_to_gguf.py --repo-id gpt2 --out data/gpt2-q8_0.gguf --quantize q8_0
-# 498 MB F32 → 248 MB Q8_0 (2x), byte-identical generation on gpt2-small
+# 498 MB F32 → 248 MB Q8_0; byte-identical generation
 ```
 
-K-quants (Q4_K_M etc.) need llama.cpp's quantizer or a C-side helper
-wrapping `ggml_quantize_chunk`; the load path would handle them but
-gguf-py can't produce them.
+K-quants (Q4_K_M etc.) need llama.cpp's quantizer.
 
-## Spinel: what's been merged upstream / what's open
+## Training
 
-What's in:
+```sh
+make setup-ggml
+make train_pleasant
+./prep/prep_tinystories.rb   # tokenize the corpus (one-time)
+./demos/train_pleasant       # bump EPOCHS in the file for a real run
+```
 
-- [matz/spinel#258](https://github.com/matz/spinel/pull/258) —
-  `fix(codegen): root PtrArray temp in array-of-objects literal`
-- [matz/spinel#473](https://github.com/matz/spinel/issues/473) —
-  `fix(codegen): clear ptr ivars after SP_POOL_NEW before init body runs`
-- [matz/spinel#474](https://github.com/matz/spinel/issues/474) —
-  `feat(ffi): :float_array / :int_array specs for zero-copy bulk transfer`
+The from-scratch model converges to TinyStories-shaped text:
 
-What I filed during the HF GPT-2 work:
+> *once upon a time there was a little boy named tim he loved to play
+> in the park…*
+
+`Toy::Trainer` ([`lib/toy_trainer.rb`](lib/toy_trainer.rb)) wraps the
+optimizer / gradients / schedule so the training loop reads as:
+
+```ruby
+trainer = Toy::Trainer.new(model)
+trainer.lr_max = 1e-3
+
+step = 0
+while step < total_steps
+  loss = trainer.step!(data[step % data.length])
+  puts "#{step}: #{loss}" if step % 100 == 0
+  step += 1
+end
+```
+
+## Spinel notes (the "why is the code shaped that way" section)
+
+[Spinel](https://github.com/matz/spinel) does whole-program type
+inference. The whole reachable Ruby has to type-check against a
+single closed world, which constrains how you can write code. The
+patterns that come up:
+
+- **Flat 1D `Float` storage** in `Mat` (Spinel can't infer `Array<Array<Float>>`).
+- **Classes, not hashes**, for records with mixed-type values.
+- **`nrows` / `ncols`** instead of `rows` / `cols` (the latter collides).
+- **Result wrappers** instead of multi-value returns.
+- **No `Array<Array<Int>>.pop`** — silently no-ops (issue #520).
+- **Hash-Int 0 ↔ nil** — `0 != nil` is `false` (issue #521).
+- **Don't reuse local-var / param names across types** — same name
+  with two concrete types unifies to `sp_RbVal` and breaks both
+  sites (issue #538). Drives the `l_*` / `g_*` prefix convention on
+  Toy::SmolLM2 / Toy::GPT2 field names.
+- **Don't reuse field names across classes with different return
+  types** — same idea, accessor flavor (issue #537).
+
+### Spinel bugs filed during this project
+
+What's been merged upstream:
+
+- [matz/spinel#258](https://github.com/matz/spinel/pull/258),
+  [#473](https://github.com/matz/spinel/issues/473),
+  [#474](https://github.com/matz/spinel/issues/474) — codegen + FFI fixes.
+
+What I filed during the HF GPT-2 + SmolLM2 work:
 
 - [matz/spinel#520](https://github.com/matz/spinel/issues/520) —
   `Array#pop` on `Array<Array<Int>>` is silently a no-op
 - [matz/spinel#521](https://github.com/matz/spinel/issues/521) —
-  stored `0` in `Hash<String, Int>` is indistinguishable from a
-  missing key; `Int 0 != nil` evaluates to `false`
+  stored `0` in `Hash<String, Int>` is indistinguishable from missing
 - [matz/spinel#532](https://github.com/matz/spinel/issues/532) —
   `String#index` returns `-1` instead of `nil` when not found
 - [matz/spinel#537](https://github.com/matz/spinel/issues/537) —
-  same-named accessor returning different types collapses to `sp_RbVal`
+  field-name collapse across classes
 - [matz/spinel#538](https://github.com/matz/spinel/issues/538) —
-  local variable / param with the same name in unrelated methods
-  collapses types to `sp_RbVal`
+  local variable / param name collapse across methods
 
-Drafts for all five are in [`docs/spinel-issues/`](docs/spinel-issues).
+Drafts are in [`docs/spinel-issues/`](docs/spinel-issues).
 
 Still open from the training-era work:
 
 - [ggml-org/ggml#1491](https://github.com/ggml-org/ggml/issues/1491) —
-  `ggml_rms_norm_back` mismatch via `ggml_backend_sched_graph_compute`
-  vs legacy `ggml_graph_compute_with_ctx`. Not blocking inference.
-
-## Spinel constraints (a partial bestiary)
-
-Spinel does whole-program type inference; the entire reachable Ruby
-has to type-check against a single closed world. Patterns that come
-up:
-
-- **Flat 1D `Float` storage** in `Mat` (`Array<Array<Float>>` from
-  `Array.new(n) { Array.new(m, 0.0) }` doesn't type-infer).
-- **Classes, not hashes**, for heterogeneous-valued records
-  (`Block`, `LayerCache`, KV cache).
-- **`nrows` / `ncols`** field names (`rows` / `cols` collide).
-- **Result wrappers** (`NormResult`, `FFResult`, `LossResult`,
-  `GPT2KVStepResult`, …) instead of multi-value returns.
-- **No `Array<Array<Int>>.pop`** — silently no-ops (issue #520).
-- **Hash-Int 0 ↔ nil** — store `value + 1` so 0 means missing
-  (issue #521).
-- **Don't reuse local-var / param names across types** — same name
-  with two concrete types unifies to `sp_RbVal`, breaks FFI boundary
-  casts. Symptoms range from "compile error" to "silently produces
-  the wrong answer 6 layers deep". Documented in
-  [`HF_GPT2.md`](HF_GPT2.md)'s "name-collapse" table.
+  `ggml_rms_norm_back` mismatch via the new scheduler. Not blocking
+  inference.
 
 ## Status
 
-Two working ends:
+Three working models:
 
 - **Training (toy):** ~30K-param TinyStories model, loss ~5.3 → ~3
-  over 30 epochs. Generations look TinyStories-shaped
-  *("once upon a time there was a little boy named tim he loved to
-  play in the park…")*. `make train_minimal && ./demos/train_minimal`
-  is the 40-step SGD smoke; `make train_tinystories &&
-  ./demos/train_tinystories` is the full run.
-- **Inference (real):** distilgpt2 + gpt2-small load from GGUF,
-  generate via KV cache, parity-match HF `transformers` byte-for-byte
-  on the argmax sequence. Self-contained binary (Ruby BPE in-process).
-  CPU works on Mac, CUDA works on Linux + NVIDIA. See
-  [HF_GPT2.md](HF_GPT2.md) for the long story.
+  over 30 epochs. `Toy::Trainer` or the older
+  `demos/train_tinystories`.
+- **Inference, GPT-2 family:** distilgpt2 + gpt2-small (124 M) load
+  from GGUF, generate via `Toy::GPT2` (native Mat) or via the FFI
+  KV-cache path. Parity-matches HuggingFace `transformers`
+  byte-for-byte on argmax sequences.
+- **Inference, llama family:** SmolLM2-135M loads from GGUF, generates
+  via `Toy::SmolLM2`. Native Mat only at this point — FFI mirror is
+  the next perf goal.
 
-A toy you can read top-to-bottom that happens to run a real model.
+A toy you can read top-to-bottom that happens to run real models.

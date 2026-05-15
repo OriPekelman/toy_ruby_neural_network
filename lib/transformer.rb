@@ -194,6 +194,42 @@ class Mat
   def set_at(i, j, v)
     @flat[i * @ncols + j] = v
   end
+
+  # --- introspection helpers -----------------------------------------------
+  # Goal: any reader can stop in the middle of a forward pass, type
+  # `puts x.shape` or `puts x.info`, and see what they're holding.
+
+  # "[5, 768]" — concise shape string for prints and logs.
+  def shape
+    "[" + @nrows.to_s + ", " + @ncols.to_s + "]"
+  end
+
+  # "Mat[5, 768] min=-2.34 max=1.97 mean=0.012" — shape + a few summary
+  # statistics. Useful for "is my activation drifting?" sanity checks.
+  def info
+    n = @nrows * @ncols
+    if n == 0
+      return "Mat[" + @nrows.to_s + ", " + @ncols.to_s + "] (empty)"
+    end
+    mn = @flat[0]
+    mx = @flat[0]
+    sum = 0.0
+    i = 0
+    while i < n
+      v = @flat[i]
+      if v < mn
+        mn = v
+      end
+      if v > mx
+        mx = v
+      end
+      sum = sum + v
+      i += 1
+    end
+    mean = sum / n.to_f
+    "Mat[" + @nrows.to_s + ", " + @ncols.to_s +
+      "] min=" + mn.to_s + " max=" + mx.to_s + " mean=" + mean.to_s
+  end
 end
 
 # ============================================================================
