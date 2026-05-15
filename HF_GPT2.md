@@ -101,6 +101,37 @@ graph-build overhead. CUDA pulls further ahead at larger models
 contexts, where the matmuls are big enough that GPU parallelism
 matters.
 
+### gpt2-small (124 M, 12 layers) — bigger model on both backends
+
+Switching the demo's `GGUF` constant from `data/distilgpt2-f32.gguf`
+to `data/gpt2-f32.gguf` is all it takes (hyperparams come from GGUF
+metadata; see `GPT2ConfigLoader.read` in `lib/gguf_load.rb`).
+
+Convert once:
+```sh
+./prep/convert_distilgpt2_to_gguf.py --repo-id gpt2 --out data/gpt2-f32.gguf
+```
+
+Bench results (T_SEQ=5, same prompt):
+
+| | Mac CPU (M2) | gx10 CUDA (GB10) |
+|---|---:|---:|
+| Native Mat (f64) | 1667 ms / fwd | 1124 ms / fwd |
+| FFI full-forward | 11.6 ms / fwd | 22.6 ms / fwd |
+| FFI KV decode | 11.3 ms / step | 22.1 ms / step |
+
+Interesting: at gpt2-small scale, Mac CPU FFI is **faster** than
+gx10 CUDA. The per-step compute is small (12 layers × 12 heads at
+d_head=64, T=5–34) and graph-build + kernel-launch overhead
+dominates over arithmetic. The GPU advantage appears at larger
+shapes (gpt2-medium / -large / -xl) and longer contexts; tiny
+models stay CPU-friendly.
+
+Parity vs HF gpt2 reference: max-abs diff `3.17e-3` (CPU) /
+`6.11e-3` (CUDA); argmax + top-5 match exactly on both. End-to-end
+generation "Hello, my name is" → "Hello, my name is John. I'm a
+writer, and" — identical token sequence across CPU and CUDA.
+
 ### KV vs full-forward at growing T
 
 The bench at T_SEQ=5 doesn't fully show the KV win: both FFI paths
