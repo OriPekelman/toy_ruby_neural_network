@@ -9,11 +9,11 @@
 # grows linearly in T_SEQ). Pre-fill walks the prompt token-by-token,
 # then generation continues with the running last-token argmax.
 
-require_relative "lib/transformer"
-require_relative "lib/gpt2"
-require_relative "lib/gpt2_ffi_kv_cuda"
-require_relative "lib/gguf_load"
-require_relative "lib/training"
+require_relative "../lib/transformer"
+require_relative "../lib/gpt2"
+require_relative "../lib/gpt2_ffi_kv_cuda"
+require_relative "../lib/gguf_load"
+require_relative "../lib/training"
 
 N_NEW    = 30
 MAX_T    = 1024   # KV-cache capacity. GPT-2 / DistilGPT2 max context.

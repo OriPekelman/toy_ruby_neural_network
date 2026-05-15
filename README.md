@@ -24,7 +24,7 @@ make setup-ggml                                          # build ggml CPU (~30 s
                                     --out data/gpt2-f32.gguf
 ./prep/dump_bpe.py                                       # vocab/merges → TSV
 echo "Once upon a time, in a quiet village by the sea" > data/prompt.txt
-make distilgpt2_demo_text && ./distilgpt2_demo_text
+make distilgpt2_demo_text && ./demos/distilgpt2_demo_text
 # → "Once upon a time, in a quiet village by the sea, there lived a
 #    curious child named Nana. She was a young girl of about five years
 #    old, and she was very curious..."
@@ -49,18 +49,24 @@ binary. ~14 ms/token KV-decode at distilgpt2 shape on an M2 Air.
 │   ├── bpe.rb                 Byte-level BPE encoder + decoder
 │   ├── tinynn.rb              FFI bridge to ggml (CPU): module TinyNN
 │   └── tinynn_cuda.rb         FFI bridge to ggml-cuda: module TinyNNCuda
+├── demos/                     End-to-end Ruby drivers (one per build target)
+│   ├── train_minimal.rb       Tiny SGD smoke
+│   ├── train_tinystories.rb   From-scratch training entrypoint
+│   ├── distilgpt2_demo.rb     Native Mat (f64) forward
+│   ├── distilgpt2_demo_ffi.rb FFI full-forward (CPU)
+│   ├── distilgpt2_demo_kv.rb  KV-cache decode (CPU)
+│   ├── distilgpt2_demo_text.rb  KV decode + Ruby BPE (text in / out)
+│   └── distilgpt2_demo_{ffi,kv}_cuda.rb   CUDA mirrors
 ├── prep/
 │   ├── prep_tinystories.rb    Tokenized corpus for the training path
 │   ├── convert_distilgpt2_to_gguf.py   HF safetensors → GGUF (incl. quants)
 │   ├── dump_bpe.py            Vocab/merges/byte-chars → TSV
-│   ├── tokens.py              Python BPE shim (host-side); now superseded by lib/bpe.rb
+│   ├── tokens.py              Python BPE shim (superseded by lib/bpe.rb)
 │   └── parity.py              HF transformers reference logits + diff
+├── tep_demo/                  Tep-based HTTP server (incl. OpenAI-compatible API)
 ├── tinynn/                    C shim (ggml wrappers) + parity / bench smokes
-├── train_tinystories.rb       From-scratch training entrypoint
-├── train_minimal.rb           Tiny SGD smoke
-├── distilgpt2_demo_text.rb    Real-model inference, text in / text out
-├── HF_GPT2.md                 Long-form notes on the HF inference path
-└── tinynn/README.md           FFI bridge design and per-op coverage
+├── docs/                      Long-form notes (scout, upstream issue drafts)
+└── HF_GPT2.md                 Long-form notes on the HF inference path
 ```
 
 ## Architecture
@@ -92,16 +98,16 @@ sequential residuals, GeLU, tied output embedding.
 
 ## Three forward paths
 
-`make … && ./…` table for the GPT-2 side. The from-scratch training
-path has its own demos (`train_minimal`, `train_tinystories`).
+`make … && ./demos/…` table for the GPT-2 side. The from-scratch
+training path has its own demos (`train_minimal`, `train_tinystories`).
 
 | Demo | What it does | Per-step (gpt2-small, T_SEQ=5) |
 |---|---|---:|
-| `distilgpt2_demo` | Native Mat (f64) forward in pure Ruby | 1.7 s |
-| `distilgpt2_demo_ffi` | FFI full-forward, T_SEQ-padded | 56 ms |
-| `distilgpt2_demo_kv` | FFI persistent KV cache, per-step decode | 14 ms |
-| `distilgpt2_demo_text` | KV cache + Ruby BPE; takes a text prompt | 14 ms |
-| `distilgpt2_demo_kv_cuda` | KV decode via ggml-cuda on gx10 GB10 | 22 ms |
+| `demos/distilgpt2_demo` | Native Mat (f64) forward in pure Ruby | 1.7 s |
+| `demos/distilgpt2_demo_ffi` | FFI full-forward, T_SEQ-padded | 56 ms |
+| `demos/distilgpt2_demo_kv` | FFI persistent KV cache, per-step decode | 14 ms |
+| `demos/distilgpt2_demo_text` | KV cache + Ruby BPE; takes a text prompt | 14 ms |
+| `demos/distilgpt2_demo_kv_cuda` | KV decode via ggml-cuda on gx10 GB10 | 22 ms |
 
 All five produce **identical token sequences** on the same prompt; the
 KV path is parity-verified against HF `transformers`' PyTorch
@@ -182,9 +188,9 @@ Two working ends:
 - **Training (toy):** ~30K-param TinyStories model, loss ~5.3 → ~3
   over 30 epochs. Generations look TinyStories-shaped
   *("once upon a time there was a little boy named tim he loved to
-  play in the park…")*. `make train_minimal && ./train_minimal` is
-  the 40-step SGD smoke; `make train_tinystories && ./train_tinystories`
-  is the full run.
+  play in the park…")*. `make train_minimal && ./demos/train_minimal`
+  is the 40-step SGD smoke; `make train_tinystories &&
+  ./demos/train_tinystories` is the full run.
 - **Inference (real):** distilgpt2 + gpt2-small load from GGUF,
   generate via KV cache, parity-match HF `transformers` byte-for-byte
   on the argmax sequence. Self-contained binary (Ruby BPE in-process).

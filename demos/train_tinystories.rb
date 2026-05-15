@@ -7,8 +7,8 @@
 # Architecture:
 #   pre-RMSNorm transformer · multi-head causal attention · GeLU FFN
 #   tied input/output embeddings · Adam · linear warmup → cosine decay
-require_relative "lib/transformer"
-require_relative "lib/training"
+require_relative "../lib/transformer"
+require_relative "../lib/training"
 
 # ---- Hyperparameters ------------------------------------------------------
 

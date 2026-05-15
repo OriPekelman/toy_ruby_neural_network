@@ -11,8 +11,8 @@
 # forward over the whole padded context). M2 (KV cache) is what makes
 # this efficient at long contexts; correctness here is the prerequisite.
 
-require_relative "lib/transformer"
-require_relative "lib/tinynn_cuda"
+require_relative "../lib/transformer"
+require_relative "../lib/tinynn_cuda"
 
 VOCAB    = 16
 D_MODEL  = 32

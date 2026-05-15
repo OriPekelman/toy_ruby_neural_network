@@ -1,38 +1,72 @@
-# tep_demo: HTTP API POC via Tep + Spinel
+# tep_demo: HTTP serving via Tep + Spinel
 
-A small HTTP server compiled by Spinel using the
-[Tep](https://github.com/OriPekelman/tep) Sinatra-flavoured framework,
-demonstrating end-to-end "Ruby source → native binary → fast HTTP" with
-our project's FFI inference path slotted in (eventually).
+[Tep](https://github.com/OriPekelman/tep) is a Sinatra-flavoured Ruby
+framework that compiles via [Spinel](https://github.com/matz/spinel)
+to a native HTTP server. This directory holds three increasingly
+ambitious endpoints on top of it, culminating in an OpenAI-compatible
+chat-completions API in front of the project's KV-cache inference path.
 
-## What works
+## Three servers
 
-`hello_api.rb` — minimal "hello world" Tep handler.
+| Source | Binary | What it does |
+|---|---|---|
+| `hello_api.rb` | `tep_demo/hello` | Minimal `GET /` smoke; baseline HTTP throughput |
+| `inference_api.rb` | `tep_demo/api` | Toy random-init `FullForwardFFICache`, `/generate?n=N` |
+| `openai_api.rb` | `tep_demo/openai_api` | **DistilGPT2/GPT-2 KV-cache decode** behind `POST /v1/chat/completions` |
+
+`openai_api.rb` is the one that talks to a real model. It implements
+`/v1/models`, `/v1/chat/completions`, `/v1/completions`, and `/health`,
+with the request/response shape that the official `openai` Python
+client expects.
+
+## Build
+
+The Makefile in the project root drives `hello` and `api`. The
+OpenAI-compat server is built via `prep/build_tep_app.sh` — a wrapper
+that pre-concatenates the project libs because Tep's translator drops
+external `require_relative` (see
+[`docs/tep-issues/01-warn-on-external-require-relative.md`](../docs/tep-issues/01-warn-on-external-require-relative.md)).
 
 ```sh
-make tep_demo/hello
-nohup ./tep_demo/hello > /tmp/h.log 2>&1 &
-# server is listening on http://0.0.0.0:4567
-
-# Bench (single Spinel-compiled worker, Connection: close, no
-# keep-alive). ~22k req/s peak on this GB10 host:
-ruby -rsocket -e '
-n = 5000; tn = 4
-q = Queue.new; n.times { |i| q << i }
-t0 = Time.now
-(1..tn).map { Thread.new {
-  while !q.empty?
-    i = q.pop(true) rescue break
-    s = TCPSocket.new("127.0.0.1", 4567)
-    s.write("GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-    s.read; s.close
-  end
-}}.each(&:join)
-puts "#{n} req @ #{tn} threads: #{(Time.now-t0).round(3)} s (#{(n/(Time.now-t0)).round(0)} req/s)"
-'
+make setup-ggml                  # one-time
+make tep_demo/hello              # ~5 s build
+make tep_demo/api                # toy inference HTTP server
+./prep/build_tep_app.sh tep_demo/openai_api.rb tep_demo/openai_api
+                                 # OpenAI-compat server (needs a converted GGUF in data/)
 ```
 
-Numbers on gx10 (NVIDIA GB10 / aarch64, 1 Spinel worker):
+## OpenAI-compatible API
+
+```sh
+./tep_demo/openai_api -p 4585 > /tmp/api.log 2>&1 &
+
+curl -s http://127.0.0.1:4585/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt2","messages":[{"role":"user","content":"Once upon a time"}],"max_tokens":20}' \
+  | jq .
+```
+
+Same endpoint works with the official `openai` Python client:
+
+```py
+from openai import OpenAI
+c = OpenAI(base_url="http://127.0.0.1:4585/v1", api_key="unused")
+print(c.chat.completions.create(
+    model="gpt2",
+    messages=[{"role": "user", "content": "Once upon a time"}],
+    max_tokens=20,
+).choices[0].message.content)
+```
+
+End-to-end throughput probe: `./tep_demo/bench_api.sh`. On an M2 Air
+this lands around **~50 tok/s** through the full HTTP pipeline; the
+KV-cache decode (~14 ms/token) is the dominant cost.
+
+## HTTP-only throughput
+
+`hello_api.rb` (no inference) measures Tep+Spinel's HTTP path in
+isolation. Numbers on gx10 (NVIDIA GB10 / aarch64, 1 worker,
+`Connection: close`):
 
 | Concurrency | Throughput |
 |---|---:|
@@ -41,32 +75,36 @@ Numbers on gx10 (NVIDIA GB10 / aarch64, 1 Spinel worker):
 | 16 threads |  19,587 req/s |
 | 64 threads |  18,122 req/s |
 
-With keep-alive + tep's prefork (workers > 1) the upstream Tep README
-claims ~167k req/s — we use `Connection: close` here for simplicity.
+With keep-alive + Tep's prefork (workers > 1) the upstream Tep README
+quotes ~167k req/s; we use `Connection: close` here for simplicity.
 
-## inference_api.rb — full inference over HTTP
+## Caveats
 
-`inference_api.rb` adds three endpoints on top of the hello plumbing:
+- **`_tep_lib/` is generated.** We bypass Tep's translator and
+  substitute the `@TEP_*@` placeholders manually:
+  ```sh
+  cp -r ~/sites/tep/lib tep_demo/_tep_lib
+  sed -i "s|@TEP_SPHTTP_O@|/home/oripekelman/sites/tep/lib/tep/sphttp.o|g" \
+      tep_demo/_tep_lib/tep/net.rb
+  sed -i "s|@TEP_SQLITE_O@|/home/oripekelman/sites/tep/lib/tep/tep_sqlite.o|g" \
+      tep_demo/_tep_lib/tep/sqlite.rb
+  ```
+  Re-run when Tep moves.
+- **Spinel name collisions.** `Mat#add` was renamed to `Mat#plus` to
+  avoid a dispatch clash with `Tep::Router#add` — method names are
+  the unit of collision, so `Mat#add!` (in-place) is fine.
+- **OpenAI parser is a hand-rolled byte scan**, not a JSON parser.
+  See [`docs/spinel-issues/03-string-index-returns-minus-one.md`](../docs/spinel-issues/03-string-index-returns-minus-one.md)
+  for why `String#index` + the `pos.nil?` idiom didn't work on Spinel.
+- **`inference_api.rb` is the older toy path** (random weights, no
+  KV cache, T_SEQ-padded forward) — kept for the per-step latency
+  table below and as a minimum-deps example. For real serving use
+  `openai_api.rb`.
 
-```
-GET /health           ok
-GET /model            {"vocab":16,"d_model":32,"d_ff":64,"n_heads":4,"n_layers":2,"context":16}
-GET /generate?n=N     {"prompt":[3,7,1],"ids":[3,7,1,1,1,...],"ms":1.46}
-```
+## `inference_api.rb` numbers (for the record)
 
-The handler runs greedy generation through `FullForwardFFICache`
-(persistent ggml graph) and reports server-side compute time.
-
-Build + bench:
-
-```sh
-make tep_demo/api          # via spinel directly (bypasses tep translator)
-nohup ./tep_demo/api > /tmp/api.log 2>&1 &
-curl -s "http://localhost:4567/generate?n=5"
-```
-
-Numbers on gx10, model = `vocab=16, d_model=32, d_ff=64, n_heads=4,
-n_layers=2, T=16`, prompt `[3,7,1]`, 1 worker, Connection: close:
+Toy model: `vocab=16, d_model=32, d_ff=64, n_heads=4, n_layers=2,
+T=16`, prompt `[3,7,1]`, gx10, 1 worker, `Connection: close`:
 
 | Request shape       | Threads | Throughput   | Tokens/sec |
 |---|---|---:|---:|
@@ -79,41 +117,4 @@ n_layers=2, T=16`, prompt `[3,7,1]`, 1 worker, Connection: close:
 
 \* `n=32` exceeds the realized `T_SEQ=16`, so generation after token 16
 gets the wrong context — the bench measures HTTP+forward throughput,
-not coherent generation. With KV cache (M2) per-token compute becomes
-1 position instead of T_SEQ, projecting an order-of-magnitude
-improvement at long contexts.
-
-Built with **Spinel master @ `85a4670`+** (the poly-recv suppression
-fix in `4024216` is needed; before that, the build hit a dispatch bug
-between `Mat#add` and `Tep::Router#add`). We renamed `Mat#add` →
-`Mat#plus` in `lib/transformer.rb` to fully sidestep the arity-mismatch
-flavour of that bug — `Mat#add!` (the in-place variant) keeps its
-name since method NAMES are what collide.
-
-The `_tep_lib/` directory holds a placeholder-substituted copy of
-`~/sites/tep/lib` — needed because our build bypasses tep's translator
-(which would normally do the `@TEP_SPHTTP_O@` substitution). Generated
-by:
-
-```sh
-cp -r ~/sites/tep/lib tep_demo/_tep_lib
-sed -i "s|@TEP_SPHTTP_O@|/home/oripekelman/sites/tep/lib/tep/sphttp.o|g" \
-    tep_demo/_tep_lib/tep/net.rb
-sed -i "s|@TEP_SQLITE_O@|/home/oripekelman/sites/tep/lib/tep/tep_sqlite.o|g" \
-    tep_demo/_tep_lib/tep/sqlite.rb
-```
-
-## Inference throughput (without the HTTP layer)
-
-`tinynn/full_forward_bench.rb` at vocab=4096, d_model=384, d_ff=1024,
-n_heads=6, n_layers=6, T=128:
-
-- Native Ruby:    1179.9 ms / forward
-- CPU FFI:           31.0 ms / forward   (38.1× speedup)
-- CUDA FFI:          33.7 ms / forward   (33.9× speedup)
-
-So per-token greedy generation without KV cache (M2 work in progress):
-roughly 32 tokens/sec on CPU FFI, 30 tokens/sec on CUDA FFI. M2 (KV
-cache) would push this to "one forward per new token but only one
-position computed" — projected order-of-magnitude faster at long
-contexts.
+not coherent generation.

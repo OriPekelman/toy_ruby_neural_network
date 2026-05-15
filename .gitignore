@@ -1,18 +1,46 @@
-# Spinel-compiled binaries
-train_minimal
-train_minimal_ffi
-train_tinystories
+# Spinel-compiled binaries (demos/ holds the Ruby sources; binaries
+# are ignored so a fresh checkout doesn't carry stale builds).
+demos/train_minimal
+demos/train_minimal_ffi
+demos/train_tinystories
+demos/inference_demo
+demos/inference_demo_cuda
+demos/distilgpt2_demo
+demos/distilgpt2_demo_ffi
+demos/distilgpt2_demo_kv
+demos/distilgpt2_demo_text
+demos/distilgpt2_demo_ffi_cuda
+demos/distilgpt2_demo_kv_cuda
 
 # Generated C from `spinel -c` at the repo root only — the tinynn/ shim
 # has hand-written .c sources that must stay tracked.
 /*.c
 
-# Generated tokenized corpus (recreate with prep/prep_tinystories.rb)
+# Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
+vendor/
+
+# Data: regenerable artifacts (corpus, models, BPE tables, prompts,
+# logits dumps). Created by prep/ scripts.
 data/ts_*.txt
+data/*.gguf
+data/prompt_ids.txt
+data/prompt.txt
+data/ours_logits.txt
+data/ref_logits.txt
+data/ours_ffi_logits.txt
+data/ours_kv_logits.txt
+data/ours_ffi_cuda_logits.txt
+data/ours_kv_cuda_logits.txt
+data/gpt2-bpe-vocab.tsv
+data/gpt2-bpe-merges.tsv
+data/gpt2-bpe-bytechars.tsv
+prep/_hf_cache/
 
 # tinynn shim build artifacts
 tinynn/*.o
 tinynn/*.a
+
+# tinynn smoke / bench binaries (all built by `make ab-smoke-*` etc.)
 tinynn/smoke
 tinynn/ab_smoke
 tinynn/ab_smoke_add
@@ -31,11 +59,6 @@ tinynn/ab_smoke_sgd
 tinynn/ab_smoke_gelu_back
 tinynn/ab_smoke_cegrad
 tinynn/ab_smoke_adam
-tinynn/gguf_smoke
-tinynn/forward_smoke
-tinynn/persistent_bench
-tinynn/persistent_bench_cuda
-tinynn/persistent_bench_big
 tinynn/ab_smoke_cuda
 tinynn/ab_smoke_all_cuda
 tinynn/ab_smoke_ffncache
@@ -44,62 +67,45 @@ tinynn/ab_smoke_adamw_op_cuda
 tinynn/ab_smoke_persistent
 tinynn/ab_smoke_dual_graph
 tinynn/ab_smoke_dual_graph_cuda
-
-# Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
-vendor/
-
-# But DO track tinynn/README.md (the FFI bridge doc)
-!tinynn/README.md
 tinynn/ab_smoke_full_forward_skeleton
 tinynn/ab_smoke_full_forward_block
+tinynn/ab_smoke_kv_write
+tinynn/ab_smoke_kv_attn
+tinynn/ab_smoke_kv_attn_multi
 tinynn/full_forward_bench
 tinynn/full_forward_bench_cuda
-inference_demo
-inference_demo_cuda
-tinynn/ab_smoke_kv_write
-tep_demo/hello
-tep_demo/api
-tep_demo/.*.tep.rb
-tep_demo/_tep_lib/
-tinynn/ab_smoke_kv_attn
-data/*.gguf
-prep/_hf_cache/
-data/prompt_ids.txt
-distilgpt2_demo
+tinynn/forward_smoke
+tinynn/persistent_bench
+tinynn/persistent_bench_cuda
+tinynn/persistent_bench_big
+tinynn/gguf_smoke
 tinynn/gguf_inspect
 tinynn/gpt2_build_smoke
 tinynn/gpt2_load_smoke
 tinynn/gpt2_parity
-data/ours_logits.txt
-data/ref_logits.txt
 tinynn/gpt2_ffi_parity
-data/ours_ffi_logits.txt
-distilgpt2_demo_ffi
-tinynn/gpt2_bench
-tinynn/kv_multi_cpy_smoke
-tinynn/gpt2_kv_parity
-data/ours_kv_logits.txt
-distilgpt2_demo_kv
-distilgpt2_demo_ffi_cuda
-distilgpt2_demo_kv_cuda
 tinynn/gpt2_ffi_parity_cuda
+tinynn/gpt2_kv_parity
 tinynn/gpt2_kv_parity_cuda
+tinynn/gpt2_bench
 tinynn/gpt2_bench_cuda
-data/ours_ffi_cuda_logits.txt
-data/ours_kv_cuda_logits.txt
-data/gpt2-bpe-vocab.tsv
-data/gpt2-bpe-merges.tsv
-data/gpt2-bpe-bytechars.tsv
-data/prompt.txt
-distilgpt2_demo_text
+tinynn/kv_multi_cpy_smoke
 tinynn/bpe_smoke
 tinynn/bpe_debug
+
+# But DO track tinynn/README.md (the FFI bridge doc)
+!tinynn/README.md
+
+# tep_demo build artifacts (sources committed; binaries + scratch ignored)
+tep_demo/hello
+tep_demo/api
 tep_demo/openai_api
 tep_demo/post_smoke
+tep_demo/.*.tep.rb
 tep_demo/.openai_api.combined.rb
 tep_demo/.openai_api.tep.rb
+tep_demo/_tep_lib/
 
-# Stale local scratch (debugger state, old prep input, smoke binaries)
+# Stale local scratch (debugger state, old prep input)
 .rdbgrc.breakpoints
 input.txt
-tinynn/ab_smoke_kv_attn_multi

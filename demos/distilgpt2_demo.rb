@@ -14,10 +14,10 @@
 # Native Mat forward — no FFI yet. Slow at distilgpt2 shape (several
 # seconds per token); the FFI persistent-graph version is M3 step 8.
 
-require_relative "lib/transformer"
-require_relative "lib/gpt2"
-require_relative "lib/gguf_load"
-require_relative "lib/training"   # for parse_ids / File reading patterns
+require_relative "../lib/transformer"
+require_relative "../lib/gpt2"
+require_relative "../lib/gguf_load"
+require_relative "../lib/training"   # for parse_ids / File reading patterns
 
 # distilgpt2 hyperparams. Match what convert_distilgpt2_to_gguf.py wrote.
 VOCAB    = 50257

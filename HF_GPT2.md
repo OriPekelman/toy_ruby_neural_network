@@ -29,9 +29,9 @@ Run any of the three demos:
 ```sh
 ./prep/tokens.py encode "Hello, my name is"
 
-make distilgpt2_demo      && ./distilgpt2_demo       # native (slow)
-make distilgpt2_demo_ffi  && ./distilgpt2_demo_ffi   # full-forward FFI
-make distilgpt2_demo_kv   && ./distilgpt2_demo_kv    # KV-cache FFI
+make distilgpt2_demo      && ./demos/distilgpt2_demo       # native (slow)
+make distilgpt2_demo_ffi  && ./demos/distilgpt2_demo_ffi   # full-forward FFI
+make distilgpt2_demo_kv   && ./demos/distilgpt2_demo_kv    # KV-cache FFI
 
 ./prep/tokens.py decode   # any of the demos write generated IDs back
 ```
@@ -88,7 +88,7 @@ the Mac.
 | FFI-CUDA full-forward, T_SEQ=5 | 7.0 | 142.4 | 53.4× |
 | FFI-CUDA KV decode, pos=5..34 | 6.2 | 160.6 | 60.2× |
 
-End-to-end demo generation (`./distilgpt2_demo_kv_cuda` on gx10) of
+End-to-end demo generation (`./demos/distilgpt2_demo_kv_cuda` on gx10) of
 "Hello, my name is" → "Hello, my name is J.J.K. Rowling.":
 - prefill (5 tokens): 33 ms
 - 7 new tokens: 40 ms (5.6 ms/step)
@@ -251,11 +251,11 @@ but the constant is small at this model size).
 │   ├── gpt2_bench.rb          Native vs FFI vs KV bench (CPU)
 │   └── gpt2_bench_cuda.rb     Same on CUDA
 │
-├── distilgpt2_demo.rb           End-to-end generation (native)
-├── distilgpt2_demo_ffi.rb       End-to-end generation (full-fwd, CPU)
-├── distilgpt2_demo_kv.rb        End-to-end generation (KV, CPU)
-├── distilgpt2_demo_ffi_cuda.rb  End-to-end generation (full-fwd, CUDA)
-└── distilgpt2_demo_kv_cuda.rb   End-to-end generation (KV, CUDA)
+├── demos/distilgpt2_demo.rb           End-to-end generation (native)
+├── demos/distilgpt2_demo_ffi.rb       End-to-end generation (full-fwd, CPU)
+├── demos/distilgpt2_demo_kv.rb        End-to-end generation (KV, CPU)
+├── demos/distilgpt2_demo_ffi_cuda.rb  End-to-end generation (full-fwd, CUDA)
+└── demos/distilgpt2_demo_kv_cuda.rb   End-to-end generation (KV, CUDA)
 ```
 
 ## Architecture notes
@@ -425,7 +425,7 @@ make gpt2-ffi-parity-cuda                         # parity probe
 make gpt2-kv-parity-cuda                          # KV parity probe
 make gpt2-bench-cuda                              # bench
 make distilgpt2_demo_kv_cuda && \
-  ./distilgpt2_demo_kv_cuda                       # end-to-end demo
+  ./demos/distilgpt2_demo_kv_cuda                       # end-to-end demo
 ```
 
 See the **Bench / gx10** section above for numbers.

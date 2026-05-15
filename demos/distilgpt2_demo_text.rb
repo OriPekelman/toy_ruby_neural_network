@@ -10,12 +10,12 @@
 #   echo "Once upon a time" > data/prompt.txt
 #   make distilgpt2_demo_text && ./distilgpt2_demo_text
 
-require_relative "lib/transformer"
-require_relative "lib/gpt2"
-require_relative "lib/gpt2_ffi_kv"
-require_relative "lib/gguf_load"
-require_relative "lib/bpe"
-require_relative "lib/training"
+require_relative "../lib/transformer"
+require_relative "../lib/gpt2"
+require_relative "../lib/gpt2_ffi_kv"
+require_relative "../lib/gguf_load"
+require_relative "../lib/bpe"
+require_relative "../lib/training"
 
 N_NEW       = 30
 MAX_T       = 1024

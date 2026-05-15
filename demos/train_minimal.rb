@@ -1,7 +1,7 @@
 # Original Spinel-compat smoke test: build a 4 K-parameter transformer,
 # run forward + backward, take 40 SGD steps over 3 hardcoded sequences.
 # Expected loss curve: ~2.0 → ~0.03 in well under a second when compiled.
-require_relative "lib/transformer"
+require_relative "../lib/transformer"
 
 model = TransformerLM.new(7, 16, 32, 2, 2, 8)
 puts "Built model"

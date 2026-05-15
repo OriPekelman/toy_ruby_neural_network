@@ -16,11 +16,11 @@
 #   make distilgpt2_demo_ffi && ./distilgpt2_demo_ffi
 #   prep/tokens.py decode
 
-require_relative "lib/transformer"
-require_relative "lib/gpt2"
-require_relative "lib/gpt2_ffi_cuda"
-require_relative "lib/gguf_load"
-require_relative "lib/training"
+require_relative "../lib/transformer"
+require_relative "../lib/gpt2"
+require_relative "../lib/gpt2_ffi_cuda"
+require_relative "../lib/gguf_load"
+require_relative "../lib/training"
 
 VOCAB    = 50257
 D_MODEL  = 768
