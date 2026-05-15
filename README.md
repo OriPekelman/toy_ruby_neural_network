@@ -1,5 +1,9 @@
 # toy
 
+<p align="center">
+  <img src="toy_logo.png" alt="toy" width="240" />
+</p>
+
 Decoder-only transformer LM in Ruby, AOT-compiled to a native binary
 by [Spinel](https://github.com/matz/spinel) (matz's Ruby AOT
 compiler). Two stories live in one repo:

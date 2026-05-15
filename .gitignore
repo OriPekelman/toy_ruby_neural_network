@@ -98,3 +98,8 @@ tep_demo/openai_api
 tep_demo/post_smoke
 tep_demo/.openai_api.combined.rb
 tep_demo/.openai_api.tep.rb
+
+# Stale local scratch (debugger state, old prep input, smoke binaries)
+.rdbgrc.breakpoints
+input.txt
+tinynn/ab_smoke_kv_attn_multi
