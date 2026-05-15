@@ -330,6 +330,161 @@ module Toy
   end
 
   # =========================================================================
+  # Toy::RoPE — rotary position embedding. Llama / SmolLM2 / Qwen2 form
+  # ("rotate_half"): split head_dim into two halves and rotate them
+  # against each other by an angle that scales with position.
+  #
+  # Precomputes cos/sin tables at construction. Rotates in-place.
+  #
+  #   for freq k in [0, Dh/2):
+  #     theta_k = theta_base^(-2k/Dh)
+  #     angle   = pos * theta_k
+  #     x[k],       x[k+Dh/2]  →
+  #       x[k]      * cos(angle) - x[k+Dh/2] * sin(angle),
+  #       x[k+Dh/2] * cos(angle) + x[k]      * sin(angle)
+  # =========================================================================
+  class RoPE
+    attr_accessor :cos_tbl, :sin_tbl, :d_head, :max_seq
+
+    # theta_base typical values: 10000 (Llama-1/2/TinyLlama), 100000
+    # (SmolLM2), 1000000 (Qwen2 long-context). Renamed from `base` to
+    # dodge Spinel's local-name collapse with int offsets named `base`.
+    def initialize(d_head, max_seq, theta_base)
+      @d_head  = d_head
+      @max_seq = max_seq
+      half     = d_head / 2
+      n        = max_seq * half
+      @cos_tbl = Array.new(n, 1.0)
+      @sin_tbl = Array.new(n, 0.0)
+      log_b    = Math.log(theta_base.to_f)
+      inv_dh   = 1.0 / d_head.to_f
+      p = 0
+      while p < max_seq
+        k = 0
+        while k < half
+          theta = Math.exp(-2.0 * k.to_f * inv_dh * log_b)
+          angle = p.to_f * theta
+          @cos_tbl[p * half + k] = Math.cos(angle)
+          @sin_tbl[p * half + k] = Math.sin(angle)
+          k += 1
+        end
+        p += 1
+      end
+    end
+
+    # x: [T, Dh] rotated in-place. Row t corresponds to absolute
+    # position (pos_start + t).
+    def rotate!(x, pos_start)
+      t    = x.nrows
+      dh   = @d_head
+      half = dh / 2
+      i = 0
+      while i < t
+        p   = pos_start + i
+        row = i * dh
+        ck = 0
+        while ck < half
+          co = @cos_tbl[p * half + ck]
+          si = @sin_tbl[p * half + ck]
+          xa = x.flat[row + ck]
+          xb = x.flat[row + half + ck]
+          x.flat[row + ck]        = xa * co - xb * si
+          x.flat[row + half + ck] = xb * co + xa * si
+          ck += 1
+        end
+        i += 1
+      end
+    end
+  end
+
+  # =========================================================================
+  # Toy::GQAttention — grouped-query causal self-attention.
+  #
+  # n_heads query heads share n_kv key/value heads (n_heads / n_kv
+  # queries per KV head). Used by SmolLM2 (9/3), TinyLlama (32/4),
+  # Qwen2.5-0.5B (14/2). When n_heads == n_kv this degenerates to
+  # standard MHA.
+  #
+  # RoPE is applied to Q and K *before* the dot product. No biases on
+  # any projection — Llama-family convention. The two-arg forward
+  # `(x, pos_start)` is needed because RoPE depends on absolute position.
+  # =========================================================================
+  class GQAttention
+    attr_accessor :w_q, :w_k, :w_v, :w_o,
+                  :n_heads, :n_kv, :d_model, :d_head,
+                  :group_size, :inv_sqrt, :rope
+
+    def initialize(d_model, n_heads, n_kv, rope_obj)
+      @d_model    = d_model
+      @n_heads    = n_heads
+      @n_kv       = n_kv
+      @d_head     = d_model / n_heads
+      @group_size = n_heads / n_kv
+      @inv_sqrt   = 1.0 / Math.sqrt(@d_head)
+      @rope       = rope_obj
+
+      @w_q = [Mat.new(d_model, @d_head)]
+      hq = 1
+      while hq < n_heads
+        @w_q.push(Mat.new(d_model, @d_head))
+        hq += 1
+      end
+      @w_k = [Mat.new(d_model, @d_head)]
+      @w_v = [Mat.new(d_model, @d_head)]
+      hkv = 1
+      while hkv < n_kv
+        @w_k.push(Mat.new(d_model, @d_head))
+        @w_v.push(Mat.new(d_model, @d_head))
+        hkv += 1
+      end
+      @w_o = Mat.new(d_model, d_model)
+    end
+
+    # x: [T, D] → [T, D].  pos_start: absolute position of row 0 of x.
+    def forward(x, pos_start)
+      # 1) project + rotate K, V once per KV head (n_kv times).
+      k0 = x.matmul(@w_k[0])                 # [T, Dh]
+      @rope.rotate!(k0, pos_start)
+      v0 = x.matmul(@w_v[0])                 # [T, Dh]  (V is not rotated)
+      ks = [k0]
+      vs = [v0]
+      hkv = 1
+      while hkv < @n_kv
+        k_h = x.matmul(@w_k[hkv])
+        @rope.rotate!(k_h, pos_start)
+        ks.push(k_h)
+        vs.push(x.matmul(@w_v[hkv]))
+        hkv += 1
+      end
+
+      # 2) per query head: project Q, rotate, attend with the
+      # corresponding (shared) K, V.
+      head0  = attend(x, 0, ks[0], vs[0], pos_start)
+      heads  = [head0]
+      hq = 1
+      while hq < @n_heads
+        grp = hq / @group_size
+        heads.push(attend(x, hq, ks[grp], vs[grp], pos_start))
+        hq += 1
+      end
+
+      concat = Toy.hstack_heads(heads, @n_heads, @d_head, @d_model)   # [T, D]
+      concat.matmul(@w_o)                                              # [T, D]
+    end
+
+    # One query-head attention.  x: [T, D] → [T, Dh].
+    def attend(x, hq, k_h, v_h, pos_start)
+      q_h = x.matmul(@w_q[hq])                 # [T, Dh]
+      @rope.rotate!(q_h, pos_start)
+      scores = q_h.matmul_t(k_h)               # [T, T]
+      scores.scale!(@inv_sqrt)
+      Toy.causal_mask!(scores)
+      Toy.softmax_rows!(scores)
+      scores.matmul(v_h)                       # [T, Dh]
+    end
+  end
+
+  # =========================================================================
   # Free-standing helpers. These operate on Mat in place where possible
   # so they read like verbs: `causal_mask!`, `add_bias!`, `softmax_rows!`.
   # =========================================================================
