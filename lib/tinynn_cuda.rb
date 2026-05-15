@@ -921,3 +921,15 @@ class FullForwardFFICacheCuda
     TinyNNCuda.tnn_matmul(@sess, t_v, t_attn)                    # ne=[d_head, T_query]
   end
 end
+
+# Spinel anchor block: mirror of the one at the end of lib/tinynn.rb,
+# this time pinning TinyNNCuda.upload_int_array's `indices` param to
+# Array<Int>. Without this, library-style methods with no reachable
+# caller default `indices` to mrb_int, the `:int_array` FFI spec's
+# `indices->data` access fails C compile.
+if false
+  _aic_sess   = TinyNNCuda.tnn_null_ptr
+  _aic_tensor = TinyNNCuda.tnn_null_ptr
+  _aic_ids    = [0]
+  TinyNNCuda.upload_int_array(_aic_sess, _aic_tensor, _aic_ids)
+end
