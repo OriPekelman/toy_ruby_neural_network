@@ -342,6 +342,18 @@ tinynn/gpt2_load_smoke: tinynn/gpt2_load_smoke.rb lib/transformer.rb lib/gpt2.rb
 demos/distilgpt2_demo: demos/distilgpt2_demo.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
+# Pleasant-API equivalent of distilgpt2_demo: same I/O contract,
+# 60 lines of glue + Toy::GPT2 (lib/toy_gpt2.rb).
+gpt2_pleasant:        demos/gpt2_pleasant
+demos/gpt2_pleasant: demos/gpt2_pleasant.rb lib/toy.rb lib/toy_gpt2.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
+# train_pleasant: same TransformerLM training as train_tinystories,
+# but wrapped in Toy::Trainer (lib/toy_trainer.rb).
+train_pleasant:        demos/train_pleasant
+demos/train_pleasant: demos/train_pleasant.rb lib/toy_trainer.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
 # FFI persistent-graph variant of distilgpt2_demo. Same I/O contract.
 demos/distilgpt2_demo_ffi: demos/distilgpt2_demo_ffi.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
@@ -522,4 +534,5 @@ distclean: clean
         ab-smoke-big-cuda test \
         train_minimal train_tinystories inference_demo inference_demo_cuda \
         distilgpt2_demo distilgpt2_demo_ffi distilgpt2_demo_kv \
-        distilgpt2_demo_text distilgpt2_demo_ffi_cuda distilgpt2_demo_kv_cuda
+        distilgpt2_demo_text distilgpt2_demo_ffi_cuda distilgpt2_demo_kv_cuda \
+        gpt2_pleasant train_pleasant

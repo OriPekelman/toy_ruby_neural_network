@@ -11,6 +11,8 @@ demos/distilgpt2_demo_kv
 demos/distilgpt2_demo_text
 demos/distilgpt2_demo_ffi_cuda
 demos/distilgpt2_demo_kv_cuda
+demos/gpt2_pleasant
+demos/train_pleasant
 
 # Generated C from `spinel -c` at the repo root only — the tinynn/ shim
 # has hand-written .c sources that must stay tracked.

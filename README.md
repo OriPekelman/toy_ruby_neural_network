@@ -41,6 +41,10 @@ binary. ~14 ms/token KV-decode at distilgpt2 shape on an M2 Air.
 │   ├── transformer.rb         Mat, Block, TransformerLM, Gradients, AdamState
 │   ├── training.rb            LRSchedule, DataLoader, Adam, corpus readers
 │   ├── gpt2.rb                GPT2LM (inference-only HF-shape transformer)
+│   ├── toy.rb                 Sugar layer: LayerNorm, Linear, Embedding,
+│   │                          CausalSelfAttention, FFN building blocks
+│   ├── toy_gpt2.rb            Toy::GPT2 — same model in ~80 lines
+│   ├── toy_trainer.rb         Toy::Trainer — pleasant training-loop wrapper
 │   ├── gpt2_ffi.rb            FFI full-forward graph (CPU)
 │   ├── gpt2_ffi_kv.rb         FFI KV-cache decode (CPU)
 │   ├── gpt2_ffi_cuda.rb       FFI full-forward (CUDA)
@@ -95,6 +99,48 @@ Block (pre-norm):
 
 Bits the two share: pre-norm structure, multi-head causal attention,
 sequential residuals, GeLU, tied output embedding.
+
+## The Toy:: sugar layer
+
+`lib/toy.rb` decomposes the same architecture into reusable building
+blocks — `Toy::LayerNorm`, `Toy::Linear`, `Toy::Embedding`,
+`Toy::CausalSelfAttention`, `Toy::FFN`. `lib/toy_gpt2.rb` composes
+them into a `Toy::GPT2` whose `forward` reads like the paper:
+
+```ruby
+# Toy::GPT2Block — pre-norm, residual after each sublayer.
+def call(x)                              # x: [T, D] → [T, D]
+  x.add!(@attn.call(@ln1.call(x)))       # residual after attention
+  x.add!(@ffn.call(@ln2.call(x)))        # residual after FFN
+  x
+end
+
+# Toy::GPT2 — embed → N × block → norm → unembed.
+def call(ids, start_pos)                                   # ids: [T] → logits [T, V]
+  x = @token_embed.lookup(ids)                              # [T, D]
+  x.add!(@pos_embed.slice(start_pos, ids.length))           # [T, D]
+  li = 0
+  while li < @cfg.n_layers
+    x = @stack[li].call(x)                                  # [T, D]
+    li += 1
+  end
+  x_final = @final_norm.call(x)                             # [T, D]
+  x_final.matmul_t(@token_embed.weight)                     # [T, V]
+end
+```
+
+Lines of model code: **312 (`GPT2LM`) → 80 (`Toy::GPT2`)**, byte-identical
+output (`demos/gpt2_pleasant` parity-tested vs `demos/distilgpt2_demo`
+on DistilGPT2).
+
+The training side gets the same treatment in `Toy::Trainer`
+(`lib/toy_trainer.rb`): the per-step `grads.fill_zero → forward →
+backward → optimizer.step` boilerplate collapses to one verb,
+`trainer.step!(seq)`, so the outer epoch / batch / sequence loop
+stays visible in the demo.
+
+See [`demos/gpt2_pleasant.rb`](demos/gpt2_pleasant.rb) and
+[`demos/train_pleasant.rb`](demos/train_pleasant.rb).
 
 ## Three forward paths
 
