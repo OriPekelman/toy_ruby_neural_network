@@ -13,6 +13,8 @@ demos/distilgpt2_demo_ffi_cuda
 demos/distilgpt2_demo_kv_cuda
 demos/gpt2_pleasant
 demos/train_pleasant
+demos/smollm2_pleasant
+data/smollm2_prompt_ids.txt
 
 # Generated C from `spinel -c` at the repo root only — the tinynn/ shim
 # has hand-written .c sources that must stay tracked.
@@ -112,3 +114,7 @@ tep_demo/_tep_lib/
 .rdbgrc.breakpoints
 input.txt
 tinynn/toy_llama_smoke
+
+# OS / agent scratch
+.DS_Store
+.claude/

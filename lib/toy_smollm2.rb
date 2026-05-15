@@ -44,61 +44,67 @@ module Toy
   end
 
   # Llama-style block: pre-norm + residual on each sublayer.
+  #
+  # Field names l_attn / l_ffn (not attn / ffn) so Spinel doesn't
+  # collapse them with Toy::GPT2Block#attn (CausalSelfAttention) and
+  # Toy::GPT2Block#ffn (FFN) — different concrete types.
   class SmolLM2Block
-    attr_accessor :rn1, :rn2, :attn, :ffn
+    attr_accessor :rn1, :rn2, :l_attn, :l_ffn
 
-    def initialize(cfg, rope_obj)
-      @rn1  = Toy::RMSNorm.new(cfg.d_model)
-      @rn1.eps = cfg.rms_eps
-      @rn2  = Toy::RMSNorm.new(cfg.d_model)
-      @rn2.eps = cfg.rms_eps
-      @attn = Toy::GQAttention.new(cfg.d_model, cfg.n_heads, cfg.n_kv, rope_obj)
-      @ffn  = Toy::SwiGLU.new(cfg.d_model, cfg.d_ff)
+    def initialize(lcfg, rope_obj)
+      @rn1    = Toy::RMSNorm.new(lcfg.d_model)
+      @rn1.eps = lcfg.rms_eps
+      @rn2    = Toy::RMSNorm.new(lcfg.d_model)
+      @rn2.eps = lcfg.rms_eps
+      @l_attn = Toy::GQAttention.new(lcfg.d_model, lcfg.n_heads, lcfg.n_kv, rope_obj)
+      @l_ffn  = Toy::SwiGLU.new(lcfg.d_model, lcfg.d_ff)
     end
 
     # x: [T, D] → [T, D].  pos_start: absolute position of row 0 of x.
     def forward(x, pos_start)
-      x.add!(@attn.forward(@rn1.forward(x), pos_start))   # residual after attention
-      x.add!(@ffn.forward(@rn2.forward(x)))               # residual after FFN
+      x.add!(@l_attn.forward(@rn1.forward(x), pos_start))   # residual after attention
+      x.add!(@l_ffn.forward(@rn2.forward(x)))               # residual after FFN
       x
     end
   end
 
   # SmolLM2 / generic llama-family decoder LM.
   #
-  # Field name notes:
-  #   - block stack is `stack` (same as Toy::GPT2; avoids collapse with
-  #     TransformerLM#blocks → spinel#537).
-  #   - `rope` holds the shared RoPE table — one per model.
+  # Field-name notes (Spinel #537 — field-name collapse across classes):
+  #   Toy::GPT2 already owns `cfg`, `stack`, `final_norm` accessors
+  #   that return GPT-2 types. SmolLM2's versions return *different*
+  #   types and would collapse. So every field on this class is
+  #   `l_*` prefixed (l for llama-family). One-letter cost, no
+  #   collapses anywhere downstream.
   class SmolLM2
-    attr_accessor :cfg, :token_embed, :final_norm, :stack, :rope
+    attr_accessor :l_cfg, :l_token_embed, :l_final_norm, :l_stack, :l_rope
 
-    def initialize(cfg)
-      @cfg         = cfg
-      @token_embed = Toy::Embedding.new(cfg.vocab, cfg.d_model)
-      @final_norm  = Toy::RMSNorm.new(cfg.d_model)
-      @final_norm.eps = cfg.rms_eps
-      @rope        = Toy::RoPE.new(cfg.d_model / cfg.n_heads,
-                                   cfg.ctx, cfg.rope_base)
+    def initialize(lcfg)
+      @l_cfg         = lcfg
+      @l_token_embed = Toy::Embedding.new(lcfg.vocab, lcfg.d_model)
+      @l_final_norm  = Toy::RMSNorm.new(lcfg.d_model)
+      @l_final_norm.eps = lcfg.rms_eps
+      @l_rope        = Toy::RoPE.new(lcfg.d_model / lcfg.n_heads,
+                                     lcfg.ctx, lcfg.rope_base)
 
-      @stack = [Toy::SmolLM2Block.new(cfg, @rope)]
+      @l_stack = [Toy::SmolLM2Block.new(lcfg, @l_rope)]
       li = 1
-      while li < cfg.n_layers
-        @stack.push(Toy::SmolLM2Block.new(cfg, @rope))
+      while li < lcfg.n_layers
+        @l_stack.push(Toy::SmolLM2Block.new(lcfg, @l_rope))
         li += 1
       end
     end
 
     # ids: Array<Int> (length T), pos_start: Int → logits [T, V]
     def forward(ids, pos_start)
-      x = @token_embed.lookup(ids)                           # [T, D]
+      x = @l_token_embed.lookup(ids)                         # [T, D]
       li = 0
-      while li < @cfg.n_layers
-        x = @stack[li].forward(x, pos_start)                 # [T, D]
+      while li < @l_cfg.n_layers
+        x = @l_stack[li].forward(x, pos_start)               # [T, D]
         li += 1
       end
-      x_final = @final_norm.forward(x)                       # [T, D]
-      x_final.matmul_t(@token_embed.weight)                  # [T, V]  (tied)
+      x_final = @l_final_norm.forward(x)                     # [T, D]
+      x_final.matmul_t(@l_token_embed.weight)                # [T, V]  (tied)
     end
   end
 end

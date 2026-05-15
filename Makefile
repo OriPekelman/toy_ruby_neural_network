@@ -345,7 +345,13 @@ demos/distilgpt2_demo: demos/distilgpt2_demo.rb lib/transformer.rb lib/gpt2.rb l
 # Pleasant-API equivalent of distilgpt2_demo: same I/O contract,
 # 60 lines of glue + Toy::GPT2 (lib/toy_gpt2.rb).
 gpt2_pleasant:        demos/gpt2_pleasant
-demos/gpt2_pleasant: demos/gpt2_pleasant.rb lib/toy.rb lib/toy_gpt2.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+demos/gpt2_pleasant: demos/gpt2_pleasant.rb lib/toy.rb lib/toy_gpt2.rb lib/toy_gpt2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
+# SmolLM2-135M (llama-family) inference via Toy::SmolLM2.
+# Tokenization is host-side: ./prep/smollm2_tokens.py encode "..."
+smollm2_pleasant:        demos/smollm2_pleasant
+demos/smollm2_pleasant: demos/smollm2_pleasant.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 # train_pleasant: same TransformerLM training as train_tinystories,
@@ -535,4 +541,4 @@ distclean: clean
         train_minimal train_tinystories inference_demo inference_demo_cuda \
         distilgpt2_demo distilgpt2_demo_ffi distilgpt2_demo_kv \
         distilgpt2_demo_text distilgpt2_demo_ffi_cuda distilgpt2_demo_kv_cuda \
-        gpt2_pleasant train_pleasant
+        gpt2_pleasant train_pleasant smollm2_pleasant

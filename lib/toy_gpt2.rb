@@ -34,18 +34,18 @@ module Toy
   # One transformer block: pre-norm, residual after attention,
   # pre-norm, residual after FFN.
   class GPT2Block
-    attr_accessor :ln1, :ln2, :attn, :ffn
+    attr_accessor :ln1, :ln2, :g_attn, :ffn
 
     def initialize(cfg)
       @ln1  = Toy::LayerNorm.new(cfg.d_model)
       @ln2  = Toy::LayerNorm.new(cfg.d_model)
-      @attn = Toy::CausalSelfAttention.new(cfg.d_model, cfg.n_heads)
+      @g_attn = Toy::CausalSelfAttention.new(cfg.d_model, cfg.n_heads)
       @ffn  = Toy::FFN.new(cfg.d_model, cfg.d_ff, :gelu_new)
     end
 
     # x: [T, D] → [T, D]
     def forward(x)
-      x.add!(@attn.forward(@ln1.forward(x)))    # residual after attention
+      x.add!(@g_attn.forward(@ln1.forward(x)))    # residual after attention
       x.add!(@ffn.forward(@ln2.forward(x)))     # residual after FFN
       x
     end
