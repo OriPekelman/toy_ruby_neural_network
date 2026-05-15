@@ -1,4 +1,4 @@
-# toy_ruby_neural_network build system.
+# toy build system.
 #
 # Default targets compile the Ruby drivers via Spinel. CUDA / ggml
 # acceleration is opt-in:
