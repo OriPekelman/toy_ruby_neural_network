@@ -38,7 +38,7 @@ module Toy
     end
 
     # x: [T, D] → [T, D]
-    def call(x)
+    def forward(x)
       t   = x.nrows
       d   = @d
       out = Mat.new(t, d)
@@ -90,7 +90,7 @@ module Toy
     end
 
     # x: [T, in_dim] → [T, out_dim]
-    def call(x)
+    def forward(x)
       out = x.matmul(@w)
       if @has_bias
         Toy.add_bias!(out, @b)
@@ -194,7 +194,7 @@ module Toy
     end
 
     # x: [T, D] → [T, D]
-    def call(x)
+    def forward(x)
       head0    = head(x, 0)               # [T, Dh]
       per_head = [head0]
       h = 1
@@ -245,7 +245,7 @@ module Toy
     end
 
     # x: [T, D] → [T, D]
-    def call(x)
+    def forward(x)
       pre = x.matmul(@w1)                 # [T, Df]
       Toy.add_bias!(pre, @b1)
       hidden = Toy.gelu_new(pre)          # [T, Df]
@@ -274,7 +274,7 @@ module Toy
     end
 
     # x: [T, D] → [T, D]
-    def call(x)
+    def forward(x)
       t   = x.nrows
       d   = @d
       out = Mat.new(t, d)
@@ -320,7 +320,7 @@ module Toy
     end
 
     # x: [T, D] → [T, D]
-    def call(x)
+    def forward(x)
       gate = x.matmul(@w_gate)              # [T, Df]
       up   = x.matmul(@w_up)                # [T, Df]
       Toy.silu!(gate)                       # [T, Df]

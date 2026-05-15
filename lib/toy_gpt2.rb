@@ -44,9 +44,9 @@ module Toy
     end
 
     # x: [T, D] → [T, D]
-    def call(x)
-      x.add!(@attn.call(@ln1.call(x)))    # residual after attention
-      x.add!(@ffn.call(@ln2.call(x)))     # residual after FFN
+    def forward(x)
+      x.add!(@attn.forward(@ln1.forward(x)))    # residual after attention
+      x.add!(@ffn.forward(@ln2.forward(x)))     # residual after FFN
       x
     end
   end
@@ -77,17 +77,17 @@ module Toy
     end
 
     # ids: Array<Int> (length T), start_pos: Int → logits [T, V]
-    def call(ids, start_pos)
+    def forward(ids, start_pos)
       x = @token_embed.lookup(ids)                              # [T, D]
       x.add!(@pos_embed.slice(start_pos, ids.length))           # [T, D]
 
       li = 0
       while li < @cfg.n_layers
-        x = @stack[li].call(x)                                   # [T, D]
+        x = @stack[li].forward(x)                                   # [T, D]
         li += 1
       end
 
-      x_final = @final_norm.call(x)                              # [T, D]
+      x_final = @final_norm.forward(x)                              # [T, D]
       x_final.matmul_t(@token_embed.weight)                      # [T, V]
     end
   end

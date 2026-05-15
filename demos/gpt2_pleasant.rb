@@ -39,7 +39,7 @@ N_NEW = 8
 gen = 0
 t0  = Time.now
 while gen < N_NEW
-  logits = model.call(ids, 0)               # [T, V]
+  logits = model.forward(ids, 0)               # [T, V]
   last   = logits.nrows - 1
   base   = last * logits.ncols
   # argmax over last row

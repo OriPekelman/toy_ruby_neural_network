@@ -17,7 +17,7 @@ xn    = Mat.new(2, 4)
 # Row 1: [1, 2, 3, 4]   → mean(x^2)=7.5 → y = x / sqrt(7.5)
 xn.flat[0]=1.0; xn.flat[1]=1.0; xn.flat[2]=1.0; xn.flat[3]=1.0
 xn.flat[4]=1.0; xn.flat[5]=2.0; xn.flat[6]=3.0; xn.flat[7]=4.0
-yn = rnorm.call(xn)
+yn = rnorm.forward(xn)
 puts "  y[0] ≈ [1, 1, 1, 1]: [" + yn.flat[0].to_s + ", " +
      yn.flat[1].to_s + "]"
 puts "  y[1,0] = " + yn.flat[4].to_s
@@ -51,7 +51,7 @@ swi.w_up.fill_random(0.1)
 swi.w_down.fill_random(0.1)
 swi_in = Mat.new(3, 8)
 swi_in.fill_random(1.0)
-swi_out = swi.call(swi_in)
+swi_out = swi.forward(swi_in)
 puts "  out shape: [" + swi_out.nrows.to_s + ", " + swi_out.ncols.to_s + "]"
 puts "  (expected [3, 8])"
 puts "  out[0,0] = " + swi_out.flat[0].to_s
