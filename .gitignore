@@ -96,6 +96,8 @@ tinynn/gpt2_bench_cuda
 tinynn/kv_multi_cpy_smoke
 tinynn/bpe_smoke
 tinynn/bpe_debug
+tinynn/ab_smoke_silu
+tinynn/ab_smoke_mul
 
 # But DO track tinynn/README.md (the FFI bridge doc)
 !tinynn/README.md

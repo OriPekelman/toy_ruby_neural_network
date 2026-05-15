@@ -103,6 +103,11 @@ module TinyNNCuda
   ffi_func :tnn_rms_norm,         [:ptr, :ptr, :ptr, :double], :ptr
   ffi_func :tnn_softmax,          [:ptr, :ptr],             :ptr
   ffi_func :tnn_diag_mask_inf,    [:ptr, :ptr, :int],       :ptr
+  # Llama-family ops
+  ffi_func :tnn_silu,             [:ptr, :ptr],             :ptr
+  ffi_func :tnn_mul,              [:ptr, :ptr, :ptr],       :ptr
+  ffi_func :tnn_rope_ext,         [:ptr, :ptr, :ptr, :int, :double], :ptr
+  ffi_func :tnn_input_1d_i32_ctx, [:ptr, :int],             :ptr
   ffi_func :tnn_concat,           [:ptr, :ptr, :ptr, :int], :ptr
   ffi_func :tnn_null_ptr,         [],                       :ptr
   ffi_func :tnn_layer_norm,       [:ptr, :ptr, :ptr, :ptr, :double], :ptr

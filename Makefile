@@ -139,6 +139,20 @@ ab-smoke-add: tinynn/ab_smoke_add
 ab-smoke-gelu: tinynn/ab_smoke_gelu
 	./tinynn/ab_smoke_gelu
 
+# Llama-family ops (silu, mul, eventually rope) — added with the
+# Toy::SmolLM2 FFI mirror work.
+ab-smoke-silu: tinynn/ab_smoke_silu
+	./tinynn/ab_smoke_silu
+
+tinynn/ab_smoke_silu: tinynn/ab_smoke_silu.rb lib/toy.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
+ab-smoke-mul: tinynn/ab_smoke_mul
+	./tinynn/ab_smoke_mul
+
+tinynn/ab_smoke_mul: tinynn/ab_smoke_mul.rb lib/toy.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
 ab-smoke-rms-norm: tinynn/ab_smoke_rms_norm
 	./tinynn/ab_smoke_rms_norm
 

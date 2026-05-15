@@ -356,6 +356,11 @@ module TinyNN
   ffi_func :tnn_rms_norm,         [:ptr, :ptr, :ptr, :double], :ptr
   ffi_func :tnn_softmax,          [:ptr, :ptr],             :ptr
   ffi_func :tnn_diag_mask_inf,    [:ptr, :ptr, :int],       :ptr
+  # Llama-family ops
+  ffi_func :tnn_silu,             [:ptr, :ptr],             :ptr
+  ffi_func :tnn_mul,              [:ptr, :ptr, :ptr],       :ptr
+  ffi_func :tnn_rope_ext,         [:ptr, :ptr, :ptr, :int, :double], :ptr
+  ffi_func :tnn_input_1d_i32_ctx, [:ptr, :int],             :ptr
   ffi_func :tnn_concat,           [:ptr, :ptr, :ptr, :int], :ptr
   ffi_func :tnn_null_ptr,         [],                       :ptr
   ffi_func :tnn_layer_norm,       [:ptr, :ptr, :ptr, :ptr, :double], :ptr
@@ -533,6 +538,75 @@ module TinyNN
       i = i + 1
     end
     TinyNN.tnn_upload(sess, ta)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # Element-wise SiLU (x * sigmoid(x)), llama-family activation.
+  # One-shot wrapper (slow per-call: session + graph + free); used by
+  # ab_smoke_silu and as a building block. The persistent-session FFN
+  # path doesn't go through this — it builds silu into a fused graph.
+  def self.silu(a)
+    sess = TinyNN.tnn_session_new(0)
+    ta = TinyNN.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tc = TinyNN.tnn_silu(sess, ta)
+    TinyNN.tnn_realize(sess, tc)
+
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, ta)
+
+    TinyNN.tnn_compute(sess)
+    TinyNN.tnn_download(sess, tc)
+
+    out = Mat.new(a.nrows, a.ncols)
+    i = 0
+    while i < n
+      out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
+      i = i + 1
+    end
+
+    TinyNN.tnn_session_free(sess)
+    out
+  end
+
+  # Element-wise multiply c = a * b. Matching shape required.
+  # One-shot wrapper. Used in SwiGLU between silu(gate) and up.
+  def self.mul(a, b)
+    sess = TinyNN.tnn_session_new(0)
+    ta = TinyNN.tnn_input_2d_f32(sess, a.nrows, a.ncols)
+    tb = TinyNN.tnn_input_2d_f32(sess, b.nrows, b.ncols)
+    tc = TinyNN.tnn_mul(sess, ta, tb)
+    TinyNN.tnn_realize(sess, tc)
+
+    n = a.nrows * a.ncols
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, a.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, ta)
+    i = 0
+    while i < n
+      TinyNN.tnn_scratch_set(sess, i, b.flat[i])
+      i = i + 1
+    end
+    TinyNN.tnn_upload(sess, tb)
 
     TinyNN.tnn_compute(sess)
     TinyNN.tnn_download(sess, tc)

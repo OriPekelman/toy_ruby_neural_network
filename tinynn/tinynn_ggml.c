@@ -422,6 +422,70 @@ void *tnn_diag_mask_inf(void *sess, void *a, int n_past)
     return (void *)ggml_diag_mask_inf(s->ctx, (struct ggml_tensor *)a, n_past);
 }
 
+/* --- Llama-family ops -------------------------------------------------- */
+
+/* SiLU activation: silu(x) = x * sigmoid(x). Used in SwiGLU FFNs
+ * (Llama / SmolLM2 / Qwen / Phi). */
+void *tnn_silu(void *sess, void *a)
+{
+    if (!sess || !a) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_silu(s->ctx, (struct ggml_tensor *)a);
+}
+
+/* Elementwise multiply c = a * b. Used to combine the gate and up
+ * projections of SwiGLU before the down projection. */
+void *tnn_mul(void *sess, void *a, void *b)
+{
+    if (!sess || !a || !b) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_mul(s->ctx,
+                             (struct ggml_tensor *)a,
+                             (struct ggml_tensor *)b);
+}
+
+/* Rotary Position Embedding (rotate_half / NEOX mode), as used by
+ * Llama / SmolLM2 / Qwen2 / Mistral. Applied to Q and K before the
+ * dot product.
+ *
+ *   a:        input tensor, shape [Dh, T, ...]   (one head's worth)
+ *   pos:      int32 tensor of length T, absolute positions per token
+ *   n_dims:   number of dimensions to rotate (= Dh for full rotary,
+ *             smaller for partial — Pythia uses Dh/4)
+ *   freq_base: theta base. 10000 (Llama-1/2), 100000 (SmolLM2),
+ *              1000000 (Qwen2 long-context)
+ *
+ * Other ggml_rope_ext params get sensible defaults (no YaRN scaling). */
+void *tnn_rope_ext(void *sess, void *a, void *pos, int n_dims, double freq_base)
+{
+    if (!sess || !a || !pos) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    const int mode = 2;   /* GGML_ROPE_TYPE_NEOX — matches HF llama rotate_half */
+    return (void *)ggml_rope_ext(s->ctx,
+                                  (struct ggml_tensor *)a,
+                                  (struct ggml_tensor *)pos,
+                                  NULL,                /* no per-dim freq scaling */
+                                  n_dims,
+                                  mode,
+                                  0,                   /* n_ctx_orig (YaRN, unused) */
+                                  (float)freq_base,
+                                  1.0f,                /* freq_scale */
+                                  0.0f,                /* ext_factor (no YaRN) */
+                                  1.0f,                /* attn_factor */
+                                  32.0f,               /* beta_fast (YaRN default) */
+                                  1.0f);               /* beta_slow (YaRN default) */
+}
+
+/* Allocate a 1-D int32 tensor in the *session* context. Used to hold
+ * RoPE position indices. The caller fills it via tnn_scratch_set_i32 +
+ * tnn_upload_int_array (or fills directly during graph build). */
+void *tnn_input_1d_i32_ctx(void *sess, int n)
+{
+    if (!sess) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    return (void *)ggml_new_tensor_1d(s->ctx, GGML_TYPE_I32, n);
+}
+
 void *tnn_softmax(void *sess, void *a)
 {
     if (!sess || !a) return NULL;

@@ -68,6 +68,13 @@ void  *tnn_layer_norm(void *sess, void *x, void *gamma_row, void *beta_row, doub
 void  *tnn_softmax(void *sess, void *a);                /* per-row softmax along ne[0] */
 void  *tnn_diag_mask_inf(void *sess, void *a, int n_past);
                                                          /* set elements above the diagonal (off by n_past) to -inf */
+
+/* --- Llama-family ops --- */
+void  *tnn_silu(void *sess, void *a);                    /* SiLU: x * sigmoid(x). SwiGLU activation. */
+void  *tnn_mul (void *sess, void *a, void *b);           /* elementwise multiply c = a * b */
+void  *tnn_rope_ext(void *sess, void *a, void *pos, int n_dims, double freq_base);
+                                                         /* RoPE (NEOX/rotate_half mode); pos is int32[T] */
+void  *tnn_input_1d_i32_ctx(void *sess, int n);          /* int32 vector in session ctx (positions for RoPE) */
 void  *tnn_concat(void *sess, void *a, void *b, int dim);
                                                          /* concat a and b along the given ne axis */
 void  *tnn_null_ptr(void);                              /* :ptr-typed NULL seed for Spinel PtrArray inference */
