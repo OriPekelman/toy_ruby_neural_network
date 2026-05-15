@@ -1,4 +1,4 @@
-# FFI-CUDA parity probe: build a persistent GPT2 ggml graph at the same
+# FFI parity probe: build a persistent GPT2 ggml graph at the same
 # T_SEQ as the prompt, upload distilgpt2 weights, run one forward,
 # dump the last-row logits to data/ours_ffi_cuda_logits.txt.
 #

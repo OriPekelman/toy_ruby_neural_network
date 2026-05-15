@@ -15,17 +15,13 @@ require_relative "lib/gpt2_ffi_kv_cuda"
 require_relative "lib/gguf_load"
 require_relative "lib/training"
 
-VOCAB    = 50257
-D_MODEL  = 768
-D_FF     = 3072
-N_HEADS  = 12
-N_LAYERS = 6
-CONTEXT  = 1024
-
 N_NEW    = 8
 MAX_T    = 32     # KV-cache capacity; must hold prompt + N_NEW
 IDS_PATH = "data/prompt_ids.txt"
-GGUF     = "data/distilgpt2-f32.gguf"
+# Swap this to point at a different GPT-2 variant (data/gpt2-f32.gguf,
+# data/gpt2-medium-f32.gguf, …) — the hyperparams are read from the
+# file's kv metadata so the rest of the code adapts automatically.
+GGUF     = "data/gpt2-f32.gguf"
 
 def read_ids(path)
   raw = ["?"]
@@ -70,8 +66,15 @@ ids = read_ids(IDS_PATH)
 puts "prompt: " + ids.length.to_s + " tokens"
 
 puts ""
+puts "reading config from " + GGUF
+cfg = GPT2ConfigLoader.read(GGUF)
+puts "  vocab=" + cfg.vocab_size.to_s + " d=" + cfg.d_model.to_s +
+     " d_ff=" + cfg.d_ff.to_s + " heads=" + cfg.n_heads.to_s +
+     " layers=" + cfg.n_layers.to_s + " ctx=" + cfg.context_length.to_s
+puts ""
 puts "constructing native GPT2LM (weight source)..."
-model = GPT2LM.new(VOCAB, D_MODEL, D_FF, N_HEADS, N_LAYERS, CONTEXT)
+model = GPT2LM.new(cfg.vocab_size, cfg.d_model, cfg.d_ff,
+                    cfg.n_heads, cfg.n_layers, cfg.context_length)
 ok = GGUFLoad.load_gpt2(model, GGUF)
 if !ok
   puts "load failed"
@@ -80,7 +83,9 @@ else
   puts ""
   puts "realizing KV-CUDA cache (MAX_T=" + MAX_T.to_s + ")..."
   cache = GPT2KVFFICacheCuda.new
-  cache.realize_for(MAX_T, D_MODEL, D_FF, N_HEADS, N_LAYERS, VOCAB, CONTEXT)
+  cache.realize_for(MAX_T, cfg.d_model, cfg.d_ff,
+                     cfg.n_heads, cfg.n_layers, cfg.vocab_size,
+                     cfg.context_length)
   puts "uploading weights..."
   t0 = Time.now
   GPT2KVCuda.upload_from(cache, model)
@@ -90,7 +95,7 @@ else
   puts ""
   puts "prefilling " + ids.length.to_s + " prompt tokens..."
   prefill_ms = 0.0
-  last_logits = Mat.new(1, VOCAB)
+  last_logits = Mat.new(1, cfg.vocab_size)
   pos = 0
   while pos < ids.length
     t_step = Time.now
@@ -102,7 +107,7 @@ else
        (prefill_ms / ids.length).to_s + " ms/token)"
 
   # First generated token comes from the LAST prefill step's logits.
-  next_id = argmax_row(last_logits, 0, VOCAB)
+  next_id = argmax_row(last_logits, 0, cfg.vocab_size)
   ids.push(next_id)
   puts ""
   puts "generating " + N_NEW.to_s + " tokens..."
@@ -115,7 +120,7 @@ else
     last_logits = GPT2KVCuda.decode_step(cache, ids[ids.length - 1], ids.length - 1)
     dt = (Time.now - t_step) * 1000.0
     gen_ms = gen_ms + dt
-    next_id = argmax_row(last_logits, 0, VOCAB)
+    next_id = argmax_row(last_logits, 0, cfg.vocab_size)
     ids.push(next_id)
     puts "  step " + (step + 1).to_s + ": id=" + next_id.to_s + "  (" + dt.to_s + " ms)"
     step = step + 1
