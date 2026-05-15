@@ -154,6 +154,11 @@ Educational, with optional acceleration for real-LM-scale work.
   [tinynn/README.md](tinynn/README.md). HTTP-server numbers,
   build details, and the inference-API blocker in
   [tep_demo/README.md](tep_demo/README.md).
+- **DistilGPT2 inference (HF model) via the same FFI stack** —
+  end-to-end loading + generation through three backends, all
+  parity-checked against PyTorch transformers. KV-cache decode at
+  ~7 ms/token on a Mac M2. See [HF_GPT2.md](HF_GPT2.md) (branch
+  `hf-gpt2`).
 
 Real LM training at this scale still wants careful hyperparameter
 sweeps; this is a hand-built toy.
