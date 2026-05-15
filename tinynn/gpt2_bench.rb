@@ -13,20 +13,15 @@ require_relative "../lib/gpt2_ffi_kv"
 require_relative "../lib/gguf_load"
 require_relative "../lib/training"
 
-VOCAB    = 50257
-D_MODEL  = 768
-D_FF     = 3072
-N_HEADS  = 12
-N_LAYERS = 6
-CONTEXT  = 1024
 T_SEQ    = 5
-MAX_T    = 32      # KV-ffi_full_cache capacity
+MAX_T    = 32      # KV-cache capacity
 
 N_NATIVE = 3       # native is slow; small N
 N_FFI    = 30      # FFI is fast; bigger N for tighter stats
 N_KV     = 30
 IDS_PATH = "data/prompt_ids.txt"
-GGUF     = "data/distilgpt2-f32.gguf"
+GGUF     = "data/gpt2-f32.gguf"
+# Hyperparams come from GGUF metadata; see lib/gguf_load.rb.
 
 def read_ids(path)
   raw = ["?"]
@@ -74,22 +69,30 @@ if ids.length != T_SEQ
 end
 
 puts ""
+cfg = GPT2ConfigLoader.read(GGUF)
+puts "config: vocab=" + cfg.vocab_size.to_s + " d=" + cfg.d_model.to_s +
+     " heads=" + cfg.n_heads.to_s + " layers=" + cfg.n_layers.to_s
+puts ""
 puts "loading native model + FFI ffi_full_cache..."
 t0 = Time.now
-model = GPT2LM.new(VOCAB, D_MODEL, D_FF, N_HEADS, N_LAYERS, 1024)
+model = GPT2LM.new(cfg.vocab_size, cfg.d_model, cfg.d_ff,
+                    cfg.n_heads, cfg.n_layers, cfg.context_length)
 GGUFLoad.load_gpt2(model, GGUF)
 puts "  native ready: " + ((Time.now - t0) * 1000).to_s + " ms"
 
 t0 = Time.now
 ffi_full_cache = GPT2FullForwardFFICache.new
-ffi_full_cache.realize_for(T_SEQ, D_MODEL, D_FF, N_HEADS, N_LAYERS, VOCAB)
+ffi_full_cache.realize_for(T_SEQ, cfg.d_model, cfg.d_ff,
+                            cfg.n_heads, cfg.n_layers, cfg.vocab_size)
 pos_slice = GPT2FFI.make_pos_slice(model, T_SEQ)
 GPT2FFI.upload_from(ffi_full_cache, model, pos_slice)
 puts "  FFI ready:    " + ((Time.now - t0) * 1000).to_s + " ms"
 
 t0 = Time.now
 kv = GPT2KVFFICache.new
-kv.realize_for(MAX_T, D_MODEL, D_FF, N_HEADS, N_LAYERS, VOCAB, CONTEXT)
+kv.realize_for(MAX_T, cfg.d_model, cfg.d_ff,
+                cfg.n_heads, cfg.n_layers, cfg.vocab_size,
+                cfg.context_length)
 GPT2KV.upload_from(kv, model)
 puts "  KV ready:     " + ((Time.now - t0) * 1000).to_s + " ms"
 
