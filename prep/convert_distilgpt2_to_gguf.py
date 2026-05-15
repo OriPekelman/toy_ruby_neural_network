@@ -94,7 +94,26 @@ def main():
     print(f"[2/4] opening {sft_path}")
     sft = safe_open(sft_path, framework="numpy")
 
+    # Tensor-name prefix sniffing: distilgpt2 uses 'transformer.h.N.…' /
+    # 'transformer.wte.weight', but the official OpenAI gpt2 release
+    # stores them flat as 'h.N.…' / 'wte.weight'. Detect by probing for
+    # one known key.
+    all_names = sft.keys()
+    if "transformer.wte.weight" in all_names:
+        prefix = "transformer."
+    elif "wte.weight" in all_names:
+        prefix = ""
+    else:
+        raise RuntimeError("could not find wte.weight (with or without "
+                           "'transformer.' prefix) in the safetensors")
+    print(f"      tensor-name prefix detected: {prefix!r}")
+
     def take(name: str) -> np.ndarray:
+        # Caller passes the "transformer.…"-style name (matches the
+        # distilgpt2 convention used in this file's mapping below);
+        # we strip 'transformer.' if the actual file is flat-named.
+        if prefix == "" and name.startswith("transformer."):
+            name = name[len("transformer."):]
         t = sft.get_tensor(name)
         return np.ascontiguousarray(t.astype(np.float32))
 

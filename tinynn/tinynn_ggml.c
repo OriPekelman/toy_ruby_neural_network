@@ -54,8 +54,11 @@ static tnn_engine *tnn_engine_get(int prefer_cuda)
     int n_backends = 0;
     backends[n_backends++] = e->backend;
     if (e->cpu_backend) backends[n_backends++] = e->cpu_backend;
+    /* Scheduler graph-size hint. Must be >= n_nodes + n_leafs of the
+     * largest graph we'll alloc. 16384 matches the per-session graph
+     * cap (see tnn_session_new). */
     e->sched = ggml_backend_sched_new(backends, NULL, n_backends,
-                                       GGML_DEFAULT_GRAPH_SIZE, false, true);
+                                       16384, false, true);
 
     *slot = e;
     return e;
@@ -125,15 +128,27 @@ void *tnn_session_new(int prefer_cuda)
         /*.no_alloc   =*/ true,
     };
     s->ctx = ggml_init(params);
-    s->graph   = ggml_new_graph(s->ctx);
-    s->graph_b = ggml_new_graph(s->ctx);
+    /* Graph node-count budget. Default GGML_DEFAULT_GRAPH_SIZE=2048
+     * is enough for distilgpt2 (6 layers, ~1200 nodes/step) but not
+     * for gpt2-small (12 layers, ~2500) and larger. 16384 covers up
+     * to gpt2-xl (48 layers). Cost is one int slot per node header. */
+    s->graph   = ggml_new_graph_custom(s->ctx, 16384, false);
+    s->graph_b = ggml_new_graph_custom(s->ctx, 16384, false);
 
     /* Weights ctx pool. Sized for ~1024 weight tensors -- generous
      * upper bound that covers FullForwardFFICache at LLM scale
      * (per layer: 2 norms + 3*n_heads + 3 = up to ~50 tensors; for
      * 16 layers that's 800; plus global). no_alloc=true so this is
      * just metadata bytes. */
-    s->ctx_w_buf_size = ggml_tensor_overhead() * 1024;
+    /* Persistent-weights ctx. One slot per tensor declared via
+     * tnn_input_*_f32_persistent. GPT-2 sizes:
+     *   distilgpt2  6 layers  ~  636 tensors
+     *   gpt2-small 12 layers  ~ 1272 tensors
+     *   gpt2-large 36 layers  ~ 7560 tensors
+     *   gpt2-xl    48 layers  ~10080 tensors  (KV cache per head adds)
+     * 16384 covers up to gpt2-xl comfortably; the no_alloc ctx only
+     * holds metadata so the extra bytes cost nothing on small models. */
+    s->ctx_w_buf_size = ggml_tensor_overhead() * 16384;
     s->ctx_w_buf = (uint8_t *)calloc(1, s->ctx_w_buf_size);
     struct ggml_init_params w_params = {
         /*.mem_size   =*/ s->ctx_w_buf_size,
@@ -614,7 +629,8 @@ int tnn_reset_for_rebuild(void *sess)
     if (!sess) return -1;
     tnn_session *s = (tnn_session *)sess;
     s->realized = 0;
-    s->graph    = ggml_new_graph(s->ctx);
+    /* Must match the size used in tnn_session_new — see comment there. */
+    s->graph    = ggml_new_graph_custom(s->ctx, 16384, false);
     return 0;
 }
 

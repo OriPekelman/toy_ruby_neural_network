@@ -399,6 +399,8 @@ module TinyNN
   ffi_func :tnn_gguf_tensor_nbytes,         [:ptr, :int],     :size_t
   ffi_func :tnn_gguf_read_f32_to_doubles,   [:ptr, :int, :float_array, :size_t], :int
   ffi_func :tnn_gguf_tensor_is_quantized,   [:ptr, :int],     :int
+  ffi_func :tnn_gguf_get_u32,               [:ptr, :str],     :int
+  ffi_func :tnn_gguf_get_f32,               [:ptr, :str],     :double
   ffi_func :tnn_gguf_write_demo_file,       [:str],           :int
   ffi_func :tnn_scratch_set_i32,  [:ptr, :int, :int],       :void
   ffi_func :tnn_scratch_get_i32,  [:ptr, :int],             :int

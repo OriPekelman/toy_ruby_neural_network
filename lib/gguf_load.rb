@@ -14,6 +14,48 @@ require_relative "transformer"
 require_relative "gpt2"
 require_relative "tinynn"
 
+# GPT-2 hyperparameters read from the GGUF's kv metadata. Same shape
+# (50257 vocab, 1024 ctx) across all variants; only d_model / d_ff /
+# n_heads / n_layers change. The converter writes these keys directly
+# via gguf.GGUFWriter (see prep/convert_distilgpt2_to_gguf.py).
+class GPT2Config
+  attr_accessor :vocab_size, :d_model, :d_ff, :n_heads, :n_layers,
+                :context_length, :ln_eps
+
+  def initialize(vocab_size, d_model, d_ff, n_heads, n_layers,
+                 context_length, ln_eps)
+    @vocab_size     = vocab_size
+    @d_model        = d_model
+    @d_ff           = d_ff
+    @n_heads        = n_heads
+    @n_layers       = n_layers
+    @context_length = context_length
+    @ln_eps         = ln_eps
+  end
+end
+
+module GPT2ConfigLoader
+  # Read all hyperparams from a GGUF file's kv metadata. Returns a
+  # populated GPT2Config; the caller passes it to GPT2LM.new and the
+  # FFI cache realize_for methods.
+  def self.read(path)
+    handle = TinyNN.tnn_gguf_load(path)
+    if handle == nil
+      puts "GPT2ConfigLoader: failed to open " + path
+      return GPT2Config.new(0, 0, 0, 0, 0, 0, 1.0e-5)
+    end
+    vocab   = TinyNN.tnn_gguf_get_u32(handle, "gpt2.vocab_size")
+    d_model = TinyNN.tnn_gguf_get_u32(handle, "gpt2.embedding_length")
+    d_ff    = TinyNN.tnn_gguf_get_u32(handle, "gpt2.feed_forward_length")
+    n_head  = TinyNN.tnn_gguf_get_u32(handle, "gpt2.attention.head_count")
+    n_layer = TinyNN.tnn_gguf_get_u32(handle, "gpt2.block_count")
+    ctx     = TinyNN.tnn_gguf_get_u32(handle, "gpt2.context_length")
+    eps     = TinyNN.tnn_gguf_get_f32(handle, "gpt2.attention.layer_norm_epsilon")
+    TinyNN.tnn_gguf_free(handle)
+    GPT2Config.new(vocab, d_model, d_ff, n_head, n_layer, ctx, eps)
+  end
+end
+
 module GGUFLoad
   # Linear-scan tensor lookup. 100 tensors × ~50 reads = 5000 string
   # compares — fine. A hash map would force Spinel into a polymorphic

@@ -130,6 +130,33 @@ int tnn_gguf_tensor_is_quantized(void *handle, int i)
     return (t == GGML_TYPE_F32) ? 0 : 1;
 }
 
+/* Look up a uint32 metadata key (e.g. "gpt2.embedding_length"). Returns
+ * the value, or -1 if the key is missing or has a non-u32 type. The
+ * caller is expected to know which kv key names are valid for the
+ * file's architecture. */
+int tnn_gguf_get_u32(void *handle, const char *key)
+{
+    if (!handle || !key) return -1;
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    int64_t kid = gguf_find_key(s->gguf_ctx, key);
+    if (kid < 0) return -1;
+    enum gguf_type t = gguf_get_kv_type(s->gguf_ctx, kid);
+    if (t != GGUF_TYPE_UINT32) return -1;
+    return (int)gguf_get_val_u32(s->gguf_ctx, kid);
+}
+
+/* Same shape for float-typed metadata (e.g. layer_norm_epsilon). */
+double tnn_gguf_get_f32(void *handle, const char *key)
+{
+    if (!handle || !key) return 0.0;
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    int64_t kid = gguf_find_key(s->gguf_ctx, key);
+    if (kid < 0) return 0.0;
+    enum gguf_type t = gguf_get_kv_type(s->gguf_ctx, kid);
+    if (t != GGUF_TYPE_FLOAT32) return 0.0;
+    return (double)gguf_get_val_f32(s->gguf_ctx, kid);
+}
+
 int tnn_gguf_write_demo_file(const char *path)
 {
     if (!path) return -1;

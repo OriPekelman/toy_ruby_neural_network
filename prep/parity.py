@@ -32,7 +32,7 @@ IDS_PATH  = Path("data/prompt_ids.txt")
 REF_PATH  = Path("data/ref_logits.txt")
 OURS_PATH = Path("data/ours_logits.txt")
 CACHE     = Path("prep/_hf_cache")
-REPO_ID   = "distilgpt2"
+DEFAULT_REPO_ID = "distilgpt2"   # override on CLI: prep/parity.py ref --repo-id gpt2
 
 
 def read_ids():
@@ -57,12 +57,17 @@ def cmd_ref():
     import torch
     from transformers import AutoModelForCausalLM
 
+    # Allow --repo-id <name> after `ref`; defaults to distilgpt2.
+    repo_id = DEFAULT_REPO_ID
+    if len(sys.argv) >= 4 and sys.argv[2] == "--repo-id":
+        repo_id = sys.argv[3]
+
     ids = read_ids()
-    print(f"prompt: {len(ids)} tokens {ids}", file=sys.stderr)
+    print(f"prompt: {len(ids)} tokens {ids}  (repo: {repo_id})", file=sys.stderr)
 
     CACHE.mkdir(parents=True, exist_ok=True)
     model = AutoModelForCausalLM.from_pretrained(
-        REPO_ID,
+        repo_id,
         cache_dir=str(CACHE),
         torch_dtype=torch.float32,
     )
