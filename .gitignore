@@ -94,3 +94,7 @@ data/prompt.txt
 distilgpt2_demo_text
 tinynn/bpe_smoke
 tinynn/bpe_debug
+tep_demo/openai_api
+tep_demo/post_smoke
+tep_demo/.openai_api.combined.rb
+tep_demo/.openai_api.tep.rb
