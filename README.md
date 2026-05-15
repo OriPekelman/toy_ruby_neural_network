@@ -1,164 +1,190 @@
-# Toy transformer LM in Ruby (Spinel-compiled, optional CUDA)
+# toy
 
-A small decoder-only transformer language model written in Ruby and
-compiled to a native binary by
-[Spinel](https://github.com/matz/spinel) — matz's Ruby AOT compiler.
-The point is **readability**: forward, backward, optimizer, and
-training loop are meant to be readable top-to-bottom.
+Decoder-only transformer LM in Ruby, AOT-compiled to a native binary
+by [Spinel](https://github.com/matz/spinel) (matz's Ruby AOT
+compiler). Two stories live in one repo:
 
-Trained from scratch on a 5K-line slice of TinyStories, the toy model
-(d_model=32, 2 layers, 4 heads, ~30K params) produces recognizable
-TinyStories-style continuations after ~30 epochs.
+1. **From-scratch training.** ~700 lines of readable Ruby — `Mat`,
+   `Block`, `TransformerLM`, forward, backward, Adam — trained on a
+   slice of TinyStories. The project's original purpose.
+2. **Real HF model inference.** DistilGPT2 and GPT-2 (124M…) load
+   from `.gguf`, run on CPU and CUDA via an FFI bridge to
+   [ggml](https://github.com/ggml-org/ggml), tokenize and detokenize
+   in pure Ruby BPE, and produce byte-identical output to PyTorch
+   `transformers`. See [HF_GPT2.md](HF_GPT2.md).
 
-For real-LLM-scale workloads a single pure-Ruby matmul is 2.6 s/iter;
-that's unviable. The `tinynn/` subdirectory adds an opt-in FFI bridge
-to [ggml](https://github.com/ggml-org/ggml) (CPU or CUDA) that closes
-the gap by 45× at LLM scale. See [`tinynn/README.md`](tinynn/README.md)
-for the bridge design, op coverage, bench numbers, and CUDA story.
+```sh
+# 30-second tour: real-model inference, self-contained binary.
+make setup-ggml                                          # build ggml CPU (~30 s)
+./prep/convert_distilgpt2_to_gguf.py --repo-id gpt2 \    # HF → GGUF (~30 s)
+                                    --out data/gpt2-f32.gguf
+./prep/dump_bpe.py                                       # vocab/merges → TSV
+echo "Once upon a time, in a quiet village by the sea" > data/prompt.txt
+make distilgpt2_demo_text && ./distilgpt2_demo_text
+# → "Once upon a time, in a quiet village by the sea, there lived a
+#    curious child named Nana. She was a young girl of about five years
+#    old, and she was very curious..."
+```
+
+No Python at runtime. GGUF model + three BPE TSVs + a 1.1 MB native
+binary. ~14 ms/token KV-decode at distilgpt2 shape on an M2 Air.
 
 ## Layout
 
 ```
 .
 ├── lib/
-│   ├── transformer.rb       Mat, Block, TransformerLM, Gradients, AdamState
-│   ├── training.rb          LRSchedule, DataLoader, Adam, corpus readers
-│   ├── tinynn.rb            FFI bridge (CPU): module TinyNN
-│   ├── tinynn_cuda.rb       FFI bridge (CUDA): module TinyNNCuda
-│   └── …
-├── prep/                    CRuby-only — runs once, writes data/
-├── data/                    Generated tokenized corpus (gitignored)
-├── tinynn/                  C shim + ab_smoke + bench files (see tinynn/README.md)
-├── train_tinystories.rb     Main training entrypoint (Spinel-compiled)
-├── train_minimal.rb         ~85-line smoke test (Spinel-compiled)
-├── Makefile                 build system + smoke targets
-└── README.md                this file
+│   ├── transformer.rb         Mat, Block, TransformerLM, Gradients, AdamState
+│   ├── training.rb            LRSchedule, DataLoader, Adam, corpus readers
+│   ├── gpt2.rb                GPT2LM (inference-only HF-shape transformer)
+│   ├── gpt2_ffi.rb            FFI full-forward graph (CPU)
+│   ├── gpt2_ffi_kv.rb         FFI KV-cache decode (CPU)
+│   ├── gpt2_ffi_cuda.rb       FFI full-forward (CUDA)
+│   ├── gpt2_ffi_kv_cuda.rb    FFI KV-cache decode (CUDA)
+│   ├── gguf_load.rb           GGUF → GPT2LM weight loader + GPT2Config
+│   ├── bpe.rb                 Byte-level BPE encoder + decoder
+│   ├── tinynn.rb              FFI bridge to ggml (CPU): module TinyNN
+│   └── tinynn_cuda.rb         FFI bridge to ggml-cuda: module TinyNNCuda
+├── prep/
+│   ├── prep_tinystories.rb    Tokenized corpus for the training path
+│   ├── convert_distilgpt2_to_gguf.py   HF safetensors → GGUF (incl. quants)
+│   ├── dump_bpe.py            Vocab/merges/byte-chars → TSV
+│   ├── tokens.py              Python BPE shim (host-side); now superseded by lib/bpe.rb
+│   └── parity.py              HF transformers reference logits + diff
+├── tinynn/                    C shim (ggml wrappers) + parity / bench smokes
+├── train_tinystories.rb       From-scratch training entrypoint
+├── train_minimal.rb           Tiny SGD smoke
+├── distilgpt2_demo_text.rb    Real-model inference, text in / text out
+├── HF_GPT2.md                 Long-form notes on the HF inference path
+└── tinynn/README.md           FFI bridge design and per-op coverage
 ```
 
 ## Architecture
 
+Plain pre-norm decoder-only transformer. Two variants live side by
+side in the codebase:
+
 ```
-token_ids ─▶ embed ─▶ [Block]×N ─▶ RMSNorm ─▶ unembed (tied) ─▶ logits
+token_ids ─▶ embed ─▶ [Block]×N ─▶ Norm ─▶ unembed (tied) ─▶ logits
 
 Block (pre-norm):
-    x ─▶ RMSNorm ─▶ multi-head causal attention ─▶ + ─┐
-                                                      │
-                                  residual ◀──────────┘
-    x'─▶ RMSNorm ─▶ FFN (Linear → GeLU → Linear) ─▶ + ─┐
-                                                       │
-                                  residual ◀───────────┘
+    x ─▶ Norm ─▶ multi-head causal attention ─▶ + ─┐
+                                                    │
+                                  residual ◀────────┘
+    x'─▶ Norm ─▶ FFN (Linear → GeLU → Linear) ─▶ + ─┐
+                                                     │
+                                  residual ◀─────────┘
 ```
 
-Standard modern bits: pre-RMSNorm, multi-head attention with per-head
-Q/K/V projections, causal masking, residual connections, learned
-positional embeddings, GeLU FFN, **tied input/output embeddings**,
-cross-entropy with the combined softmax+CE gradient, **linear warmup
-+ cosine LR decay**, KV cache for incremental generation.
+- `TransformerLM` (`lib/transformer.rb`): from-scratch training-shape
+  model. RMSNorm, no biases, tied embeddings, learned absolute pos
+  embeddings. Forward + backward + Adam all in pure Ruby.
+- `GPT2LM` (`lib/gpt2.rb`): HF-shape inference-only model. LayerNorm
+  with bias, biases on every Linear, GeLU(`gelu_new`), tied
+  embeddings, learned absolute pos. Loads from `.gguf`.
 
-Both **plain SGD** and **Adam** (with bias correction) are implemented
-in `lib/transformer.rb` as `apply_gradients_sgd` /
-`apply_gradients_adam`. `train_minimal.rb` calls SGD directly for its
-smoke-test loop; `train_tinystories.rb` uses the `Adam` wrapper in
-`lib/training.rb`, which owns the m/v moment state and steps the
-model.
+Bits the two share: pre-norm structure, multi-head causal attention,
+sequential residuals, GeLU, tied output embedding.
 
-## Usage
+## Three forward paths
+
+`make … && ./…` table for the GPT-2 side. The from-scratch training
+path has its own demos (`train_minimal`, `train_tinystories`).
+
+| Demo | What it does | Per-step (gpt2-small, T_SEQ=5) |
+|---|---|---:|
+| `distilgpt2_demo` | Native Mat (f64) forward in pure Ruby | 1.7 s |
+| `distilgpt2_demo_ffi` | FFI full-forward, T_SEQ-padded | 56 ms |
+| `distilgpt2_demo_kv` | FFI persistent KV cache, per-step decode | 14 ms |
+| `distilgpt2_demo_text` | KV cache + Ruby BPE; takes a text prompt | 14 ms |
+| `distilgpt2_demo_kv_cuda` | KV decode via ggml-cuda on gx10 GB10 | 22 ms |
+
+All five produce **identical token sequences** on the same prompt; the
+KV path is parity-verified against HF `transformers`' PyTorch
+reference at F32 ULP precision (`max_abs_diff ≈ 3e-3` on the final
+logits, argmax + top-5 match exactly).
+
+Full numbers in [HF_GPT2.md](HF_GPT2.md). Older training-side
+performance story in [tinynn/README.md](tinynn/README.md).
+
+## Quantization
+
+The same converter writes Q8_0 / Q4_0 / Q5_0 GGUFs (legacy
+quantizers via `gguf-py`). The existing `tnn_gguf_read_f32_to_doubles`
+dequantizes via ggml's type-traits — no project changes needed.
 
 ```sh
-# 1. Prep — download, tokenize, chunk into context windows. CRuby.
-ruby prep/prep_tinystories.rb --max_lines 5000 --context_length 64 \
-                              --prompt "Once upon a time"
-
-# 2. Build vendored ggml as a static archive (one-time, ~30 s).
-make setup-ggml             # CPU only
-make setup-ggml-cuda        # adds CUDA (defaults to sm_121 / GB10)
-
-# 3. Build train_tinystories. Default is native (pure-Ruby Mat#matmul).
-make train_tinystories
-./train_tinystories
-
-# Smoke test (build + 40 SGD steps, <30 ms):
-make train_minimal && ./train_minimal
+./prep/convert_distilgpt2_to_gguf.py --repo-id gpt2 --out data/gpt2-q8_0.gguf --quantize q8_0
+# 498 MB F32 → 248 MB Q8_0 (2x), byte-identical generation on gpt2-small
 ```
 
-To enable the FFI bridge, flip `USE_FFI_MATMUL = true` at the top of
-`lib/transformer.rb`. The FFN's two matmuls then dispatch through
-`TinyNN.matmul` (ggml-CPU) instead of `Mat#matmul`. See
-[`tinynn/README.md`](tinynn/README.md) for the CUDA flow.
+K-quants (Q4_K_M etc.) need llama.cpp's quantizer or a C-side helper
+wrapping `ggml_quantize_chunk`; the load path would handle them but
+gguf-py can't produce them.
 
-## Spinel constraints (and why some idioms look unusual)
+## Spinel: what's been merged upstream / what's open
 
-Spinel does whole-program type inference; the entire reachable Ruby
-has to type-check against a single closed world. Several patterns are
-workarounds for this; the load-bearing ones are listed at the top of
-`lib/transformer.rb` and include:
-
-- **Flat 1D `Float` storage** in `Mat` (Spinel can't infer
-  `Array<Array<Float>>` from `Array.new(n) { Array.new(m, 0.0) }`).
-- **Classes, not hashes**, for `Block` / `LayerCache` / `KV cache`
-  (heterogeneous-valued hashes confuse Spinel's codegen).
-- **`nrows` / `ncols`** field names (not `rows` / `cols` — the latter
-  hits a name-collision in iterative inference).
-- **Result wrappers** (`NormResult`, `FFResult`, `LossResult`, …) where
-  one would normally use a multi-value return.
-- **Warm-up call** in `train_tinystories.rb` to anchor class-method
-  param inference from a top-level call site.
-
-## What's been merged upstream
+What's in:
 
 - [matz/spinel#258](https://github.com/matz/spinel/pull/258) —
-  `fix(codegen): root PtrArray temp in array-of-objects literal`. Found
-  while debugging a SIGSEGV in `Block#initialize`.
+  `fix(codegen): root PtrArray temp in array-of-objects literal`
 - [matz/spinel#473](https://github.com/matz/spinel/issues/473) —
-  closed 2026-05-14: `fix(codegen): clear ptr ivars after SP_POOL_NEW
-  before init body runs`. Restored end-to-end training after the
-  per-class free-list pool regression in 4a7a678.
+  `fix(codegen): clear ptr ivars after SP_POOL_NEW before init body runs`
 - [matz/spinel#474](https://github.com/matz/spinel/issues/474) —
-  closed 2026-05-14: `feat(ffi): :float_array / :int_array specs
-  for zero-copy bulk transfer`. The FFI bridge's bulk-upload primitive.
+  `feat(ffi): :float_array / :int_array specs for zero-copy bulk transfer`
 
-Still open:
+What I filed during the HF GPT-2 work:
+
+- [matz/spinel#520](https://github.com/matz/spinel/issues/520) —
+  `Array#pop` on `Array<Array<Int>>` is silently a no-op
+- [matz/spinel#521](https://github.com/matz/spinel/issues/521) —
+  stored `0` in `Hash<String, Int>` is indistinguishable from a
+  missing key; `Int 0 != nil` evaluates to `false`
+
+Drafts for both are in [`docs/spinel-issues/`](docs/spinel-issues).
+
+Still open from the training-era work:
 
 - [ggml-org/ggml#1491](https://github.com/ggml-org/ggml/issues/1491) —
-  `ggml_rms_norm_back` produces different output via
-  `ggml_backend_sched_graph_compute` than via legacy
-  `ggml_graph_compute_with_ctx`. Blocks `TinyNN.rms_norm_back`
-  parity; not blocking training (project's native RMSNorm backward
-  runs fine).
+  `ggml_rms_norm_back` mismatch via `ggml_backend_sched_graph_compute`
+  vs legacy `ggml_graph_compute_with_ctx`. Not blocking inference.
+
+## Spinel constraints (a partial bestiary)
+
+Spinel does whole-program type inference; the entire reachable Ruby
+has to type-check against a single closed world. Patterns that come
+up:
+
+- **Flat 1D `Float` storage** in `Mat` (`Array<Array<Float>>` from
+  `Array.new(n) { Array.new(m, 0.0) }` doesn't type-infer).
+- **Classes, not hashes**, for heterogeneous-valued records
+  (`Block`, `LayerCache`, KV cache).
+- **`nrows` / `ncols`** field names (`rows` / `cols` collide).
+- **Result wrappers** (`NormResult`, `FFResult`, `LossResult`,
+  `GPT2KVStepResult`, …) instead of multi-value returns.
+- **No `Array<Array<Int>>.pop`** — silently no-ops (issue #520).
+- **Hash-Int 0 ↔ nil** — store `value + 1` so 0 means missing
+  (issue #521).
+- **Don't reuse local-var / param names across types** — same name
+  with two concrete types unifies to `sp_RbVal`, breaks FFI boundary
+  casts. Symptoms range from "compile error" to "silently produces
+  the wrong answer 6 layers deep". Documented in
+  [`HF_GPT2.md`](HF_GPT2.md)'s "name-collapse" table.
 
 ## Status
 
-Educational, with optional acceleration for real-LM-scale work.
+Two working ends:
 
-- Loss on TinyStories converges from ~5.3 (epoch 1) to ~3 (epoch 30)
-  with the upgraded stack.
-- Generations look plausibly TinyStories-shaped:
-  *"once upon a time there was a little boy named tim he loved to
-  play in the park with his best friends…"*
-- FFI bridge: 22 ggml ops + chained FFN graph + `FullForwardFFICache`
-  (entire model forward as one persistent graph) + ggml-native AdamW
-  + KV-cache primitives (view + cpy) + LayerNorm verified on both CPU
-  and CUDA. At "more than toy" shape (vocab=4096, d_model=384, n_heads=6,
-  n_layers=6, T=128) the full forward runs **38× faster on CPU FFI**
-  (1180 ms → 31 ms/iter) and **34× faster on CUDA FFI**. End-to-end
-  inference works: `./inference_demo` generates greedy-sampled tokens
-  via the FFI graph, parity-checked against native forward.
-- HTTP API POC: `make tep_demo/api && ./tep_demo/api` builds a
-  single-binary Tep+Spinel server that runs greedy generation
-  through `FullForwardFFICache`. **2,738 req/s = ~13.7k tokens/sec**
-  at 16-thread concurrency on this toy model (vocab=16, d_model=32,
-  n_layers=2). 1.46 ms per `/generate?n=5` server-side. See
-  [tep_demo/README.md](tep_demo/README.md) for full numbers and the
-  `make tep_demo/hello` minimal variant.
-- Full performance story and the path to fully-on-GPU training in
-  [tinynn/README.md](tinynn/README.md). HTTP-server numbers,
-  build details, and the inference-API blocker in
-  [tep_demo/README.md](tep_demo/README.md).
-- **DistilGPT2 inference (HF model) via the same FFI stack** —
-  end-to-end loading + generation through three backends, all
-  parity-checked against PyTorch transformers. KV-cache decode at
-  ~7 ms/token on a Mac M2. See [HF_GPT2.md](HF_GPT2.md) (branch
-  `hf-gpt2`).
+- **Training (toy):** ~30K-param TinyStories model, loss ~5.3 → ~3
+  over 30 epochs. Generations look TinyStories-shaped
+  *("once upon a time there was a little boy named tim he loved to
+  play in the park…")*. `make train_minimal && ./train_minimal` is
+  the 40-step SGD smoke; `make train_tinystories && ./train_tinystories`
+  is the full run.
+- **Inference (real):** distilgpt2 + gpt2-small load from GGUF,
+  generate via KV cache, parity-match HF `transformers` byte-for-byte
+  on the argmax sequence. Self-contained binary (Ruby BPE in-process).
+  CPU works on Mac, CUDA works on Linux + NVIDIA. See
+  [HF_GPT2.md](HF_GPT2.md) for the long story.
 
-Real LM training at this scale still wants careful hyperparameter
-sweeps; this is a hand-built toy.
+A toy you can read top-to-bottom that happens to run a real model.
