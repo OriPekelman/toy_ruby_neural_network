@@ -1260,15 +1260,16 @@ end
 
 
 
-# Spinel anchor block: ensure `TinyNN.upload_int_array(...)` is seen
-# called from a concrete call site with `[0]` as the third arg, so
-# Spinel pins the `indices` param to `Array<Int>`. Without this,
-# library-style methods with no reachable caller default `indices`
-# to `mrb_int`, and the `:int_array` FFI spec's `indices->data`
-# access then fails C compile.
+# Spinel anchor block: library-style methods (upload_int_array,
+# embed_lookup) with no reachable caller default their `indices`
+# param to `mrb_int` (or, with Spinel post-6b2ae3b body-usage
+# inference, to a bitset — produces `(x >> i) & 1` for `x[i]`).
+# Pin them to Array<Int> with concrete callsites in a guarded block.
 if false
   _ai_sess   = TinyNN.tnn_null_ptr
   _ai_tensor = TinyNN.tnn_null_ptr
   _ai_ids    = [0]
+  _ai_table  = Mat.new(1, 1)
   TinyNN.upload_int_array(_ai_sess, _ai_tensor, _ai_ids)
+  TinyNN.embed_lookup(_ai_table, _ai_ids)
 end
