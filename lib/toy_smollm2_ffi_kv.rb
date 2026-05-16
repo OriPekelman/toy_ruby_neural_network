@@ -189,7 +189,8 @@ class SmolLM2KVFFICache
     hkv = 0
     while hkv < @n_kv
       t_k_new = TinyNN.tnn_matmul(@sess, blk.t_w_k[hkv], t_h)         # ne=[d_head, 1]
-      t_k_rot = TinyNN.tnn_rope_ext(@sess, t_k_new, t_pos, @d_head, @rope_base)
+      # DEBUG: skip RoPE — write k_new unrotated
+      t_k_rot = t_k_new
       t_v_new = TinyNN.tnn_matmul(@sess, t_h, blk.t_w_v[hkv])         # ne=[1, d_head]
 
       t_K_slot = TinyNN.tnn_view_2d(@sess, blk.t_K[hkv],
@@ -242,7 +243,8 @@ class SmolLM2KVFFICache
     hkv = hq / @group_size
 
     t_q_new = TinyNN.tnn_matmul(@sess, blk.t_w_q[hq], t_h)   # ne=[d_head, 1]
-    t_q     = TinyNN.tnn_rope_ext(@sess, t_q_new, t_pos, @d_head, @rope_base)
+    # DEBUG: skip RoPE on Q
+    t_q     = t_q_new
 
     t_K_hist = TinyNN.tnn_view_2d(@sess, blk.t_K[hkv],
                                     @d_head, pos + 1, bytes_d_head, 0)
