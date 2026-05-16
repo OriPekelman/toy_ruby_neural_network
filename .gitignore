@@ -15,6 +15,7 @@ demos/gpt2_pleasant
 demos/train_pleasant
 demos/smollm2_pleasant
 demos/smollm2_kv
+demos/smollm2_kv_cuda
 data/smollm2_prompt_ids.txt
 
 # Generated C from `spinel -c` at the repo root only — the tinynn/ shim

@@ -373,6 +373,11 @@ smollm2_kv:        demos/smollm2_kv
 demos/smollm2_kv: demos/smollm2_kv.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
+# CUDA mirror.
+smollm2_kv_cuda:        demos/smollm2_kv_cuda
+demos/smollm2_kv_cuda: demos/smollm2_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+	$(SPINEL) $< -o $@
+
 # train_pleasant: same TransformerLM training as train_tinystories,
 # but wrapped in Toy::Trainer (lib/toy_trainer.rb).
 train_pleasant:        demos/train_pleasant
@@ -560,4 +565,4 @@ distclean: clean
         train_minimal train_tinystories inference_demo inference_demo_cuda \
         distilgpt2_demo distilgpt2_demo_ffi distilgpt2_demo_kv \
         distilgpt2_demo_text distilgpt2_demo_ffi_cuda distilgpt2_demo_kv_cuda \
-        gpt2_pleasant train_pleasant smollm2_pleasant smollm2_kv
+        gpt2_pleasant train_pleasant smollm2_pleasant smollm2_kv smollm2_kv_cuda
