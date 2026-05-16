@@ -94,16 +94,20 @@ module Toy
         li += 1
       end
 
-      # Output projection: placeholder Mat to pin Spinel's type
-      # inference. Real allocation happens in enable_untied_output!
-      # when the loader sees `output.weight` in the GGUF.
-      @output_proj       = Mat.new(1, 1)
+      # Always allocate the output projection at full [V, D] shape so
+      # Spinel sees a stable Mat with known dimensions from the very
+      # first reference. Costs vocab*d_model floats of memory even on
+      # tied models (a few MB on SmolLM2, 256MB on TinyLlama) — small
+      # next to the actual weights and avoids reassign-after-construct
+      # surprises in the AOT type model.
+      @output_proj       = Mat.new(cfg.vocab, cfg.d_model)
       @has_untied_output = false
     end
 
-    # Called by the GGUF loader when `output.weight` is present.
+    # Called by the GGUF loader when `output.weight` is present. The
+    # Mat is already allocated; this just flips the flag so the
+    # forward uses it.
     def enable_untied_output!
-      @output_proj       = Mat.new(@cfg.vocab, @cfg.d_model)
       @has_untied_output = true
     end
 
