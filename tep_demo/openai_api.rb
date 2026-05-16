@@ -86,14 +86,8 @@ puts "[openai_api] ready; serving"
 
 # Extract the *concatenated* content of every `"content":"..."` in the
 # request body. Tep::Json doesn't traverse nested arrays/objects, so
-# we walk manually. Handles the two escape sequences common in chat
-# payloads (\" and \\); other escapes pass through.
-#
-# Implemented as a single byte-level scan rather than via String#index.
-# Originally that was a defense against matz/spinel#532 (String#index
-# returning -1 instead of nil) — that's now fixed upstream — but the
-# byte scan also handles JSON-escape decoding (`\"`, `\\`, `\n`, `\t`)
-# inline, which is the load-bearing reason to keep it.
+# we walk manually. The byte scan also handles JSON-escape decoding
+# (`\"`, `\\`, `\n`, `\t`) inline.
 def extract_messages_text(body)
   out = ""
   n = body.bytesize

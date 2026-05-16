@@ -46,6 +46,22 @@ curl -s http://127.0.0.1:4585/v1/chat/completions \
   | jq .
 ```
 
+For an interactive chat against it, use the bundled client:
+
+```sh
+TOY_API=http://127.0.0.1:4585/v1 ./tep_demo/chat.rb
+# > Hello, my name is
+# John. I'm a writer, and I'm a writer. I'm a writer. ...
+#   [turn 1, 1932 ms]
+# > /tokens 20
+# > /system You are a helpful assistant.
+# > /quit
+```
+
+`tep_demo/chat.rb` is CRuby host-side (Net::HTTP + JSON, no deps).
+It owns the conversation history; the server is stateless. Slash
+commands: `/reset`, `/system <text>`, `/tokens <N>`, `/quit`.
+
 Same endpoint works with the official `openai` Python client:
 
 ```py
