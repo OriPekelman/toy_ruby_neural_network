@@ -63,13 +63,53 @@ something about TinyLlama's shape exercises a different bug.
 # → "Once upon a time" + sensible continuation (slow: ~4.5 s/token)
 ```
 
-## Next debugging step
+## Layer-count bisection — non-monotonic NaN pattern
 
-Add an intermediate `tnn_set_output` + download after each layer's
-output (or after K-cache write) in `build_block_step`. Walk
-layer-by-layer to find the first NaN. That nails down which op
-introduces it.
+Forcing `cfg.n_layers = N` in the demo before `realize_for` and the
+model construction (so only N out of 22 layers are loaded and run):
 
-Until then: the TinyLlama path is committed but flagged as broken on
-FFI. SmolLM2-135M remains the bench-of-record for the llama-family
-FFI throughput numbers.
+| n_layers | logits[0..4] |
+|---:|---|
+| 1  | finite (0.22, -0.15, ...) |
+| 2  | finite |
+| 3  | finite |
+| 4  | finite |
+| 5  | **NaN** |
+| 6–14 | finite |
+| 15 | **NaN** |
+| 20, 22 | **NaN** |
+
+L=5 reproduces deterministically across multiple runs. L=10 is
+consistently fine, even though it includes layers 0–4 (the same ones
+that NaN in L=5). So this is *not* "layer 4 has a bad weight" — the
+NaN depends on the total layer count, not which specific layers
+participate.
+
+That points away from a math/weights cause and toward a Spinel codegen
+or ggml-graph-state interaction that varies with the size of the
+`@kv_blocks_ffi` array or the total persistent-buffer layout. Possible
+mechanisms:
+
+* Spinel arrays with N elements may use different internal storage
+  for some N (inline vs heap) and one path silently mis-aliases.
+* `ggml_backend_alloc_ctx_tensors` lays out persistent tensors
+  differently at different total sizes; some layouts may put
+  adjacent tensors in a pattern that ggml's compute kernels
+  mis-handle.
+* Compute-graph buffer / scratch sizing crosses some threshold at
+  specific node counts.
+
+## Next debugging step (when revisited)
+
+1. Verify by setting `cfg.n_layers = 5` *but* skip the actual ggml
+   compute for layer 4 (return identity). If NaN goes away, layer
+   4's compute IS the trigger, but only at that total count.
+2. Print `model.stack[i].rn1.gamma[0]` and other selected values for
+   each layer at L=5 vs L=10 to confirm same weights were loaded.
+3. Add an intermediate `tnn_set_output` after layer 0, layer 2, etc.
+   and compare downloaded activations across runs.
+4. Check `model.norm.weight` (gamma=3.188 max value) doesn't compound
+   abnormally in the FFI graph.
+
+Until then: SmolLM2-135M remains the bench-of-record for the
+llama-family FFI throughput numbers.

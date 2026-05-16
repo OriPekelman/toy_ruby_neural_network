@@ -21,9 +21,6 @@ MAX_T    = 256
 N_NEW    = 16
 
 cfg = SmolLM2ConfigLoader.read(GGUF)
-# DEBUG: bisect — run only 1 layer to see if NaN comes from accumulation or single-layer.
-cfg.n_layers = 1
-puts "DEBUG: layers capped at " + cfg.n_layers.to_s
 puts "config: vocab=" + cfg.vocab.to_s +
      " d=" + cfg.d_model.to_s +
      " n_q=" + cfg.n_heads.to_s +
@@ -72,12 +69,6 @@ while n < N_NEW
   pos = ids.length
   last_id = ids[pos - 1]
   logits = SmolLM2KVCuda.decode_step(kv, last_id, pos)
-  if n == 0
-    puts "DEBUG: 1-layer first decode logits[0..4] = " +
-         logits.flat[0].to_s + ", " + logits.flat[1].to_s + ", " +
-         logits.flat[2].to_s + ", " + logits.flat[3].to_s + ", " +
-         logits.flat[4].to_s
-  end
   best_i = 0
   best_v = logits.flat[0]
   j = 1
