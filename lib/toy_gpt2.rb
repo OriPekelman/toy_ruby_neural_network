@@ -34,34 +34,32 @@ module Toy
   # One transformer block: pre-norm, residual after attention,
   # pre-norm, residual after FFN.
   class GPT2Block
-    attr_accessor :ln1, :ln2, :g_attn, :ffn
+    attr_accessor :ln1, :ln2, :attn, :ffn
 
     def initialize(cfg)
       @ln1  = Toy::LayerNorm.new(cfg.d_model)
       @ln2  = Toy::LayerNorm.new(cfg.d_model)
-      @g_attn = Toy::CausalSelfAttention.new(cfg.d_model, cfg.n_heads)
+      @attn = Toy::CausalSelfAttention.new(cfg.d_model, cfg.n_heads)
       @ffn  = Toy::FFN.new(cfg.d_model, cfg.d_ff, :gelu_new)
     end
 
     # x: [T, D] → [T, D]
     def forward(x)
-      x.add!(@g_attn.forward(@ln1.forward(x)))    # residual after attention
+      x.add!(@attn.forward(@ln1.forward(x)))    # residual after attention
       x.add!(@ffn.forward(@ln2.forward(x)))       # residual after FFN
       x
     end
 
     def param_count
       @ln1.param_count + @ln2.param_count +
-        @g_attn.param_count + @ffn.param_count
+        @attn.param_count + @ffn.param_count
     end
   end
 
-  # GPT-2: decoder-only transformer LM.
-  #
-  # Field name note: the block array is `stack`, not `blocks`. Spinel's
-  # whole-program inference unifies field-name lookups across types,
-  # and `blocks` is already taken by TransformerLM (Array<Block>) /
-  # ForwardCache (cache.layers).
+  # GPT-2: decoder-only transformer LM. `stack` (not `blocks`) is kept
+  # as the field name for readability — "the stack of N transformer
+  # blocks" — independent of the older Spinel field-name-collapse
+  # constraint that originally forced it.
   class GPT2
     attr_accessor :cfg, :token_embed, :pos_embed, :stack, :final_norm
 
@@ -125,7 +123,7 @@ module Toy
       s = s + "  [" + Toy.fmt_count(@pos_embed.param_count) + "]\n"
       s = s + "  stack: " + @cfg.n_layers.to_s + " × GPT2Block\n"
       s = s + "    ln1:    " + blk0.ln1.summary + "\n"
-      s = s + "    g_attn: " + blk0.g_attn.summary + "\n"
+      s = s + "    attn: " + blk0.attn.summary + "\n"
       s = s + "    ln2:    " + blk0.ln2.summary + "\n"
       s = s + "    ffn:    " + blk0.ffn.summary + "\n"
       s = s + "    (per-block params: " + Toy.fmt_count(blk0.param_count) + ")\n"

@@ -108,20 +108,20 @@ puts "=== Toy::SmolLM2 (tiny) ==="
 tiny = Toy::SmolLM2Config.new(32, 12, 6, 2, 24, 2, 16, 10000.0, 1.0e-5)
 sm   = Toy::SmolLM2.new(tiny)
 # Fill weights with small randoms (no parity expected; just shape flow).
-sm.l_token_embed.weight.fill_random(0.1)
-sm.l_final_norm.gamma.length.times { |j| sm.l_final_norm.gamma[j] = 1.0 }
+sm.token_embed.weight.fill_random(0.1)
+sm.final_norm.gamma.length.times { |j| sm.final_norm.gamma[j] = 1.0 }
 li = 0
 while li < tiny.n_layers
-  sblk2 = sm.l_stack[li]
+  sblk2 = sm.stack[li]
   sblk2.rn1.gamma.length.times { |j| sblk2.rn1.gamma[j] = 1.0 }
   sblk2.rn2.gamma.length.times { |j| sblk2.rn2.gamma[j] = 1.0 }
-  sblk2.l_attn.w_q.length.times  { |h| sblk2.l_attn.w_q[h].fill_random(0.1) }
-  sblk2.l_attn.w_k.length.times  { |h| sblk2.l_attn.w_k[h].fill_random(0.1) }
-  sblk2.l_attn.w_v.length.times  { |h| sblk2.l_attn.w_v[h].fill_random(0.1) }
-  sblk2.l_attn.w_o.fill_random(0.1)
-  sblk2.l_ffn.w_gate.fill_random(0.1)
-  sblk2.l_ffn.w_up.fill_random(0.1)
-  sblk2.l_ffn.w_down.fill_random(0.1)
+  sblk2.attn.w_q.length.times  { |h| sblk2.attn.w_q[h].fill_random(0.1) }
+  sblk2.attn.w_k.length.times  { |h| sblk2.attn.w_k[h].fill_random(0.1) }
+  sblk2.attn.w_v.length.times  { |h| sblk2.attn.w_v[h].fill_random(0.1) }
+  sblk2.attn.w_o.fill_random(0.1)
+  sblk2.ffn.w_gate.fill_random(0.1)
+  sblk2.ffn.w_up.fill_random(0.1)
+  sblk2.ffn.w_down.fill_random(0.1)
   li += 1
 end
 

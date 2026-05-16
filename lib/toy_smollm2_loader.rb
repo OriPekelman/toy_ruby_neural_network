@@ -12,7 +12,7 @@ module GGUFLoad
   # Tensor name conventions match prep/convert_smollm2_to_gguf.py.
   # The converter has already transposed every nn.Linear weight from
   # HF's [out, in] to our [in, out] orientation.
-  def self.load_toy_smollm2(llm, path)
+  def self.load_toy_smollm2(model, path)
     handle = TinyNN.tnn_gguf_load(path)
     if handle == nil
       puts "open failed: " + path
@@ -21,37 +21,36 @@ module GGUFLoad
     n_tensors = TinyNN.tnn_gguf_n_tensors(handle)
     puts "loading " + path + " (" + n_tensors.to_s + " tensors)"
 
-    lcfg    = llm.l_cfg
-    d_model = lcfg.d_model
-    n_heads = lcfg.n_heads
-    n_kv    = lcfg.n_kv
+    cfg     = model.cfg
+    d_model = cfg.d_model
+    n_heads = cfg.n_heads
+    n_kv    = cfg.n_kv
     d_head  = d_model / n_heads
 
-    read_mat(handle,   "token_embd.weight",  llm.l_token_embed.weight, n_tensors)
-    read_array(handle, "output_norm.weight", llm.l_final_norm.gamma,   n_tensors)
+    read_mat(handle,   "token_embd.weight",  model.token_embed.weight, n_tensors)
+    read_array(handle, "output_norm.weight", model.final_norm.gamma,   n_tensors)
 
     li = 0
-    while li < lcfg.n_layers
-      # Spinel name-collapse defense: `sblk` is unique across the program.
-      sblk   = llm.l_stack[li]
+    while li < cfg.n_layers
+      blk    = model.stack[li]
       prefix = "blk." + li.to_s
 
-      read_array(handle, prefix + ".attn_norm.weight", sblk.rn1.gamma, n_tensors)
-      read_array(handle, prefix + ".ffn_norm.weight",  sblk.rn2.gamma, n_tensors)
+      read_array(handle, prefix + ".attn_norm.weight", blk.rn1.gamma, n_tensors)
+      read_array(handle, prefix + ".ffn_norm.weight",  blk.rn2.gamma, n_tensors)
 
       # Q: full [d_model, n_heads * d_head] = [d_model, d_model]
       read_split_heads_weight(handle, prefix + ".attn_q.weight",
-                               sblk.l_attn.w_q, n_heads, d_model, d_head, n_tensors)
+                               blk.attn.w_q, n_heads, d_model, d_head, n_tensors)
       # K, V: narrower [d_model, n_kv * d_head] — uses the GQA reader.
       read_split_kv_weight(handle, prefix + ".attn_k.weight",
-                            sblk.l_attn.w_k, n_kv, d_model, d_head, n_tensors)
+                            blk.attn.w_k, n_kv, d_model, d_head, n_tensors)
       read_split_kv_weight(handle, prefix + ".attn_v.weight",
-                            sblk.l_attn.w_v, n_kv, d_model, d_head, n_tensors)
-      read_mat(handle,   prefix + ".attn_output.weight", sblk.l_attn.w_o, n_tensors)
+                            blk.attn.w_v, n_kv, d_model, d_head, n_tensors)
+      read_mat(handle,   prefix + ".attn_output.weight", blk.attn.w_o, n_tensors)
 
-      read_mat(handle,   prefix + ".ffn_gate.weight", sblk.l_ffn.w_gate, n_tensors)
-      read_mat(handle,   prefix + ".ffn_up.weight",   sblk.l_ffn.w_up,   n_tensors)
-      read_mat(handle,   prefix + ".ffn_down.weight", sblk.l_ffn.w_down, n_tensors)
+      read_mat(handle,   prefix + ".ffn_gate.weight", blk.ffn.w_gate, n_tensors)
+      read_mat(handle,   prefix + ".ffn_up.weight",   blk.ffn.w_up,   n_tensors)
+      read_mat(handle,   prefix + ".ffn_down.weight", blk.ffn.w_down, n_tensors)
 
       li = li + 1
     end

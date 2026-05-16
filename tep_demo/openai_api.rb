@@ -89,10 +89,11 @@ puts "[openai_api] ready; serving"
 # we walk manually. Handles the two escape sequences common in chat
 # payloads (\" and \\); other escapes pass through.
 #
-# Implemented as a single byte-level scan rather than via String#index
-# — Spinel's String#index sometimes returns the conflated 0/nil
-# (see matz/spinel#521) which makes the loop terminate or repeat
-# incorrectly. Manual scan is also stricter about state.
+# Implemented as a single byte-level scan rather than via String#index.
+# Originally that was a defense against matz/spinel#532 (String#index
+# returning -1 instead of nil) — that's now fixed upstream — but the
+# byte scan also handles JSON-escape decoding (`\"`, `\\`, `\n`, `\t`)
+# inline, which is the load-bearing reason to keep it.
 def extract_messages_text(body)
   out = ""
   n = body.bytesize

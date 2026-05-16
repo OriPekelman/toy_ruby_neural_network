@@ -16,9 +16,6 @@
 require_relative "toy"
 
 module Toy
-  # Same shape as Toy::GPT2Config but with the llama-extra fields. Kept
-  # as a separate class so Spinel's field-name lookups don't have to
-  # disambiguate (e.g. `cfg.n_kv` exists here, not on GPT2Config).
   class SmolLM2Config
     attr_accessor :vocab, :d_model, :n_heads, :n_kv, :d_ff,
                   :n_layers, :ctx, :rope_base, :rms_eps
@@ -44,80 +41,69 @@ module Toy
   end
 
   # Llama-style block: pre-norm + residual on each sublayer.
-  #
-  # Field names l_attn / l_ffn (not attn / ffn) so Spinel doesn't
-  # collapse them with Toy::GPT2Block#attn (CausalSelfAttention) and
-  # Toy::GPT2Block#ffn (FFN) — different concrete types.
   class SmolLM2Block
-    attr_accessor :rn1, :rn2, :l_attn, :l_ffn
+    attr_accessor :rn1, :rn2, :attn, :ffn
 
-    def initialize(lcfg, rope_obj)
-      @rn1    = Toy::RMSNorm.new(lcfg.d_model)
-      @rn1.eps = lcfg.rms_eps
-      @rn2    = Toy::RMSNorm.new(lcfg.d_model)
-      @rn2.eps = lcfg.rms_eps
-      @l_attn = Toy::GQAttention.new(lcfg.d_model, lcfg.n_heads, lcfg.n_kv, rope_obj)
-      @l_ffn  = Toy::SwiGLU.new(lcfg.d_model, lcfg.d_ff)
+    def initialize(cfg, rope_obj)
+      @rn1     = Toy::RMSNorm.new(cfg.d_model)
+      @rn1.eps = cfg.rms_eps
+      @rn2     = Toy::RMSNorm.new(cfg.d_model)
+      @rn2.eps = cfg.rms_eps
+      @attn    = Toy::GQAttention.new(cfg.d_model, cfg.n_heads, cfg.n_kv, rope_obj)
+      @ffn     = Toy::SwiGLU.new(cfg.d_model, cfg.d_ff)
     end
 
     # x: [T, D] → [T, D].  pos_start: absolute position of row 0 of x.
     def forward(x, pos_start)
-      x.add!(@l_attn.forward(@rn1.forward(x), pos_start))   # residual after attention
-      x.add!(@l_ffn.forward(@rn2.forward(x)))               # residual after FFN
+      x.add!(@attn.forward(@rn1.forward(x), pos_start))   # residual after attention
+      x.add!(@ffn.forward(@rn2.forward(x)))               # residual after FFN
       x
     end
 
     def param_count
       @rn1.param_count + @rn2.param_count +
-        @l_attn.param_count + @l_ffn.param_count
+        @attn.param_count + @ffn.param_count
     end
   end
 
   # SmolLM2 / generic llama-family decoder LM.
-  #
-  # Field-name notes (Spinel #537 — field-name collapse across classes):
-  #   Toy::GPT2 already owns `cfg`, `stack`, `final_norm` accessors
-  #   that return GPT-2 types. SmolLM2's versions return *different*
-  #   types and would collapse. So every field on this class is
-  #   `l_*` prefixed (l for llama-family). One-letter cost, no
-  #   collapses anywhere downstream.
   class SmolLM2
-    attr_accessor :l_cfg, :l_token_embed, :l_final_norm, :l_stack, :l_rope
+    attr_accessor :cfg, :token_embed, :final_norm, :stack, :rope
 
-    def initialize(lcfg)
-      @l_cfg         = lcfg
-      @l_token_embed = Toy::Embedding.new(lcfg.vocab, lcfg.d_model)
-      @l_final_norm  = Toy::RMSNorm.new(lcfg.d_model)
-      @l_final_norm.eps = lcfg.rms_eps
-      @l_rope        = Toy::RoPE.new(lcfg.d_model / lcfg.n_heads,
-                                     lcfg.ctx, lcfg.rope_base)
+    def initialize(cfg)
+      @cfg         = cfg
+      @token_embed = Toy::Embedding.new(cfg.vocab, cfg.d_model)
+      @final_norm  = Toy::RMSNorm.new(cfg.d_model)
+      @final_norm.eps = cfg.rms_eps
+      @rope        = Toy::RoPE.new(cfg.d_model / cfg.n_heads,
+                                   cfg.ctx, cfg.rope_base)
 
-      @l_stack = [Toy::SmolLM2Block.new(lcfg, @l_rope)]
+      @stack = [Toy::SmolLM2Block.new(cfg, @rope)]
       li = 1
-      while li < lcfg.n_layers
-        @l_stack.push(Toy::SmolLM2Block.new(lcfg, @l_rope))
+      while li < cfg.n_layers
+        @stack.push(Toy::SmolLM2Block.new(cfg, @rope))
         li += 1
       end
     end
 
     # ids: Array<Int> (length T), pos_start: Int → logits [T, V]
     def forward(ids, pos_start)
-      x = @l_token_embed.lookup(ids)                         # [T, D]
+      x = @token_embed.lookup(ids)                           # [T, D]
       li = 0
-      while li < @l_cfg.n_layers
-        x = @l_stack[li].forward(x, pos_start)               # [T, D]
+      while li < @cfg.n_layers
+        x = @stack[li].forward(x, pos_start)                 # [T, D]
         li += 1
       end
-      x_final = @l_final_norm.forward(x)                     # [T, D]
-      x_final.matmul_t(@l_token_embed.weight)                # [T, V]  (tied)
+      x_final = @final_norm.forward(x)                       # [T, D]
+      x_final.matmul_t(@token_embed.weight)                  # [T, V]  (tied)
     end
 
     # Total trainable parameter count (tied embeddings counted once).
     def param_count
-      total = @l_token_embed.param_count + @l_final_norm.param_count
+      total = @token_embed.param_count + @final_norm.param_count
       li = 0
-      while li < @l_cfg.n_layers
-        total = total + @l_stack[li].param_count
+      while li < @cfg.n_layers
+        total = total + @stack[li].param_count
         li += 1
       end
       total
@@ -126,27 +112,27 @@ module Toy
     # Build a multi-line description of the architecture and return
     # it as a String. Caller does `puts model.describe`.
     def describe
-      sblk0 = @l_stack[0]
+      blk0 = @stack[0]
       s = "Toy::SmolLM2 (" + Toy.fmt_count(param_count) + " params)\n"
-      s = s + "  config: vocab=" + @l_cfg.vocab.to_s
-      s = s + " d_model=" + @l_cfg.d_model.to_s
-      s = s + " n_heads=" + @l_cfg.n_heads.to_s
-      s = s + " n_kv=" + @l_cfg.n_kv.to_s
-      s = s + " d_ff=" + @l_cfg.d_ff.to_s
-      s = s + " n_layers=" + @l_cfg.n_layers.to_s
-      s = s + " ctx=" + @l_cfg.ctx.to_s
-      s = s + " rope_base=" + @l_cfg.rope_base.to_s + "\n"
-      s = s + "  l_token_embed: " + @l_token_embed.summary
-      s = s + "  [" + Toy.fmt_count(@l_token_embed.param_count) + "]\n"
-      s = s + "  l_rope:        " + @l_rope.summary + "\n"
-      s = s + "  l_stack: " + @l_cfg.n_layers.to_s + " × SmolLM2Block\n"
-      s = s + "    rn1:    " + sblk0.rn1.summary + "\n"
-      s = s + "    l_attn: " + sblk0.l_attn.summary + "\n"
-      s = s + "    rn2:    " + sblk0.rn2.summary + "\n"
-      s = s + "    l_ffn:  " + sblk0.l_ffn.summary + "\n"
-      s = s + "    (per-block params: " + Toy.fmt_count(sblk0.param_count) + ")\n"
-      s = s + "  l_final_norm: " + @l_final_norm.summary + "\n"
-      s = s + "  unembed: tied to l_token_embed (logits = x · l_token_embed.T)"
+      s = s + "  config: vocab=" + @cfg.vocab.to_s
+      s = s + " d_model=" + @cfg.d_model.to_s
+      s = s + " n_heads=" + @cfg.n_heads.to_s
+      s = s + " n_kv=" + @cfg.n_kv.to_s
+      s = s + " d_ff=" + @cfg.d_ff.to_s
+      s = s + " n_layers=" + @cfg.n_layers.to_s
+      s = s + " ctx=" + @cfg.ctx.to_s
+      s = s + " rope_base=" + @cfg.rope_base.to_s + "\n"
+      s = s + "  token_embed: " + @token_embed.summary
+      s = s + "  [" + Toy.fmt_count(@token_embed.param_count) + "]\n"
+      s = s + "  rope:        " + @rope.summary + "\n"
+      s = s + "  stack: " + @cfg.n_layers.to_s + " × SmolLM2Block\n"
+      s = s + "    rn1:  " + blk0.rn1.summary + "\n"
+      s = s + "    attn: " + blk0.attn.summary + "\n"
+      s = s + "    rn2:  " + blk0.rn2.summary + "\n"
+      s = s + "    ffn:  " + blk0.ffn.summary + "\n"
+      s = s + "    (per-block params: " + Toy.fmt_count(blk0.param_count) + ")\n"
+      s = s + "  final_norm: " + @final_norm.summary + "\n"
+      s = s + "  unembed: tied to token_embed (logits = x · token_embed.T)"
       s
     end
   end

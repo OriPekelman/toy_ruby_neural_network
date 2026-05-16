@@ -254,43 +254,51 @@ end
 [Spinel](https://github.com/matz/spinel) does whole-program type
 inference. The whole reachable Ruby has to type-check against a
 single closed world, which constrains how you can write code. The
-patterns that come up:
+patterns that still come up:
 
 - **Flat 1D `Float` storage** in `Mat` (Spinel can't infer `Array<Array<Float>>`).
 - **Classes, not hashes**, for records with mixed-type values.
 - **`nrows` / `ncols`** instead of `rows` / `cols` (the latter collides).
 - **Result wrappers** instead of multi-value returns.
-- **No `Array<Array<Int>>.pop`** — silently no-ops (issue #520).
-- **Hash-Int 0 ↔ nil** — `0 != nil` is `false` (issue #521).
-- **Don't reuse local-var / param names across types** — same name
-  with two concrete types unifies to `sp_RbVal` and breaks both
-  sites (issue #538). Drives the `l_*` / `g_*` prefix convention on
-  Toy::SmolLM2 / Toy::GPT2 field names.
-- **Don't reuse field names across classes with different return
-  types** — same idea, accessor flavor (issue #537).
+- **Typed-Int hashes need `has_key?`** — a stored `0` is indistinguishable
+  from a missing key under nil-check semantics (matz/spinel#521,
+  design constraint). Use `if h.has_key?(k); use(h[k]); end`, not
+  `if h[k] != nil`. Affects [`lib/bpe.rb`](lib/bpe.rb)'s merges table.
 
-### Spinel bugs filed during this project
+Constraints that *used* to bite us but are now fixed upstream:
 
-What's been merged upstream:
+- ~~Local-var / param name collapse across methods~~ — fixed in #538;
+  the `l_*` / `g_*` prefixes that were on `Toy::SmolLM2`,
+  `Toy::SmolLM2Block`, and the loader functions have been removed.
+- ~~Field-name collapse across classes with different return types~~ —
+  fixed in #537, same removal.
+- ~~`Array<Array<Int>>.pop` silently no-ops~~ — fixed in #520.
+- ~~`String#index` returns `-1` instead of `nil`~~ — fixed in #532
+  (commit 0210389 on Spinel master). The byte-scanner in
+  [`tep_demo/openai_api.rb`](tep_demo/openai_api.rb) is kept because
+  it also handles JSON-escape decoding inline, but the original
+  Spinel-quirk justification no longer applies.
+
+### Spinel issues filed during this project
+
+All closed at time of writing (Spinel ≥ `b7282aa`, May 2026):
 
 - [matz/spinel#258](https://github.com/matz/spinel/pull/258),
   [#473](https://github.com/matz/spinel/issues/473),
-  [#474](https://github.com/matz/spinel/issues/474) — codegen + FFI fixes.
-
-What I filed during the HF GPT-2 + SmolLM2 work:
-
+  [#474](https://github.com/matz/spinel/issues/474) — codegen + FFI fixes (training-era).
 - [matz/spinel#520](https://github.com/matz/spinel/issues/520) —
-  `Array#pop` on `Array<Array<Int>>` is silently a no-op
+  `Array#pop` on `Array<Array<Int>>` no-op → **fixed**
 - [matz/spinel#521](https://github.com/matz/spinel/issues/521) —
-  stored `0` in `Hash<String, Int>` is indistinguishable from missing
+  `Hash<String, Int>` 0 / nil conflation → **design constraint**;
+  `has_key?` is the right workaround
 - [matz/spinel#532](https://github.com/matz/spinel/issues/532) —
-  `String#index` returns `-1` instead of `nil` when not found
+  `String#index` returning -1 not nil → **fixed**
 - [matz/spinel#537](https://github.com/matz/spinel/issues/537) —
-  field-name collapse across classes
+  field-name collapse across classes → **fixed**
 - [matz/spinel#538](https://github.com/matz/spinel/issues/538) —
-  local variable / param name collapse across methods
+  local-var / param name collapse across methods → **fixed**
 
-Drafts are in [`docs/spinel-issues/`](docs/spinel-issues).
+Issue drafts and reproductions are in [`docs/spinel-issues/`](docs/spinel-issues).
 
 Still open from the training-era work:
 

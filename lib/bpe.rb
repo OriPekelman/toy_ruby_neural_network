@@ -93,18 +93,21 @@ module GPT2BPE
       end
     end
 
-    # merges: <rank>\t<A>\t<B>. We store (rank + 1) in the hash so
-    # that 0 reliably means "key missing" — Spinel evaluates
-    # `0 != nil` as *false* (it conflates the two in truthiness
-    # checks), which would silently drop the rank-0 merge ("Ġ t",
-    # the highest-priority merge in GPT-2's BPE) at every encode.
+    # merges: <rank>\t<A>\t<B>. Store the actual rank; lookup uses
+    # has_key? to distinguish a stored 0 (the rank-0 merge "Ġ t",
+    # GPT-2's highest-priority merge) from missing keys.
+    #
+    # (Older versions of this file stored `rank + 1` to dodge a Spinel
+    # quirk where `Int 0 != nil` evaluated to false — see matz/spinel#521
+    # for the discussion. has_key? always worked correctly on the
+    # typed hash, so this is the cleaner form matz recommended.)
     File.open(dir + "/gpt2-bpe-merges.tsv", "r") do |f|
       f.each_line do |line|
         parts = line.chomp.split("\t")
         rank = parts[0].to_i
         a    = parts[1]
         b    = parts[2]
-        tables.merge_rank[a + "\t" + b] = rank + 1
+        tables.merge_rank[a + "\t" + b] = rank
       end
     end
 
@@ -135,11 +138,12 @@ module GPT2BPE
       i = 0
       while i < word.length - 1
         key = word[i] + "\t" + word[i + 1]
-        # rank stored as (real_rank + 1); 0 means missing.
-        rank = tables.merge_rank[key]
-        if rank > 0 && rank < best_rank
-          best_rank = rank
-          best_i    = i
+        if tables.merge_rank.has_key?(key)
+          rank = tables.merge_rank[key]
+          if rank < best_rank
+            best_rank = rank
+            best_i    = i
+          end
         end
         i = i + 1
       end
