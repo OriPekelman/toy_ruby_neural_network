@@ -54,6 +54,15 @@ module Toy
       @ln1.param_count + @ln2.param_count +
         @attn.param_count + @ffn.param_count
     end
+
+    def algorithm_card
+      s =  "Algorithm: GPT2Block.forward(x)\n"
+      s = s + "  Input/Output: x ∈ R^{T×D}\n"
+      s = s + "  1: x ← x + Attn (LN(x; γ_1, β_1, ε))             ▷ residual after attention\n"
+      s = s + "  2: x ← x + FFN  (LN(x; γ_2, β_2, ε))             ▷ residual after FFN\n"
+      s = s + "  3: return x"
+      s
+    end
   end
 
   # GPT-2: decoder-only transformer LM. `stack` (not `blocks`) is kept
@@ -129,6 +138,45 @@ module Toy
       s = s + "    (per-block params: " + Toy.fmt_count(blk0.param_count) + ")\n"
       s = s + "  final_norm: " + @final_norm.summary + "\n"
       s = s + "  unembed: tied to token_embed (logits = x · token_embed.T)"
+      s
+    end
+
+    # Phuong–Hutter style algorithm card for the whole model.
+    # See arXiv:2207.09238 for the formalism. Mamba (arXiv:2312.00752)
+    # and FlashAttention (arXiv:2205.14135) Algorithm 1 are the modern
+    # exemplars for shape-annotated pseudocode.
+    def algorithm_card
+      s =  "Algorithm: Toy::GPT2.forward(x, p_start)             [HF GPT-2 family]\n"
+      s = s + "  Input:    x ∈ {1..V}^T   (token IDs)\n"
+      s = s + "            p_start ∈ ℕ    (absolute position of x[0])\n"
+      s = s + "  Output:   P ∈ R^{T×V}    (logits)\n"
+      s = s + "  Hyper:    V=" + @cfg.vocab.to_s + " D=" + @cfg.d_model.to_s +
+              " H=" + @cfg.n_heads.to_s + " D_f=" + @cfg.d_ff.to_s +
+              " N=" + @cfg.n_layers.to_s + " ctx=" + @cfg.ctx.to_s + "\n"
+      s = s + "  Param:    W_e ∈ R^{V×D}, W_p ∈ R^{ctx×D}\n"
+      s = s + "            θ_block_ℓ for ℓ=1..N\n"
+      s = s + "            γ_f, β_f ∈ R^D\n"
+      s = s + "            (total " + Toy.fmt_count(param_count) + ", embeddings tied: logits = e · W_e^⊤)\n"
+      s = s + "  1: e ← W_e[x] + W_p[p_start : p_start+T]                              e ∈ R^{T×D}\n"
+      s = s + "  2: for ℓ ← 1, …, N do\n"
+      s = s + "  3:    e ← e + Attn(LN(e; γ_ℓ^1, β_ℓ^1, ε); θ_ℓ^attn)                    e ∈ R^{T×D}\n"
+      s = s + "  4:    e ← e + FFN (LN(e; γ_ℓ^2, β_ℓ^2, ε); θ_ℓ^ffn )                    e ∈ R^{T×D}\n"
+      s = s + "  5: end for\n"
+      s = s + "  6: e ← LN(e; γ_f, β_f, ε)                                              e ∈ R^{T×D}\n"
+      s = s + "  7: P ← e · W_e^⊤                                                       P ∈ R^{T×V}\n"
+      s = s + "  8: return P"
+      s
+    end
+
+    # Recursive card — model + block + sub-ops inlined.
+    def algorithm_card_full
+      blk = @stack[0]
+      s = algorithm_card + "\n\n"
+      s = s + "─── sub-algorithms ─────────────────────────────────────────────────────\n\n"
+      s = s + blk.algorithm_card    + "\n\n"
+      s = s + blk.ln1.algorithm_card  + "\n\n"
+      s = s + blk.attn.algorithm_card + "\n\n"
+      s = s + blk.ffn.algorithm_card
       s
     end
   end

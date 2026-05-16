@@ -126,3 +126,5 @@ tinynn/toy_llama_smoke
 .claude/
 demos/tinyllama_native
 demos/tinyllama_kv
+demos/algorithm_cards
+data/_cards/

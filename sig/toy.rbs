@@ -1,0 +1,303 @@
+# sig/toy.rbs — type signatures for the Toy:: surface.
+#
+# Documentation today (Steep can read it; Phuong–Hutter algorithm-card
+# emitter reads it as the source of truth). Future input to Spinel if
+# RBS-consumption lands upstream (see matz/spinel discussion).
+#
+# Conventions:
+#   - Mat is a 2-D Float matrix with flat f64 storage. Where shape is
+#     load-bearing in a method body, the docstring uses shape names
+#     (T = sequence length, D = d_model, Dh = d_head, etc.).
+#   - Array[Integer] is used for token-id lists; Array[Float] for
+#     1-D real vectors (norm gammas, biases).
+#   - All `forward: (Mat) -> Mat` methods are pure in the
+#     `x → output` sense; they may build internal tensors but do not
+#     mutate the input.
+#   - The `param_count` method counts trainable parameters; tied
+#     embeddings are counted once at the model level.
+
+# ============================================================================
+# Mat — 2D Float matrix, flat row-major f64 storage.
+# (Lives in lib/transformer.rb.)
+# ============================================================================
+class Mat
+  attr_accessor nrows: Integer
+  attr_accessor ncols: Integer
+  attr_accessor flat:  Array[Float]
+
+  def initialize: (Integer nrows, Integer ncols) -> void
+
+  def fill_random: (Float scale) -> void
+  def fill_zero:   () -> void
+
+  # (m × n) · (n × p) → (m × p)
+  def matmul:   (Mat other) -> Mat
+  # self · otherᵀ
+  def matmul_t: (Mat other) -> Mat
+  # selfᵀ · other
+  def t_matmul: (Mat other) -> Mat
+
+  def transpose: () -> Mat
+  def plus:      (Mat other) -> Mat
+  def add!:      (Mat other) -> Mat
+  def scale!:    (Float s)   -> Mat
+  def get:       (Integer i, Integer j) -> Float
+  def set_at:    (Integer i, Integer j, Float v) -> void
+
+  # Introspection.
+  def shape: () -> String          # "[5, 768]"
+  def info:  () -> String          # "Mat[5, 768] min=… max=… mean=…"
+end
+
+# ============================================================================
+# Toy:: building blocks.
+# ============================================================================
+module Toy
+  type activation = :gelu_new
+
+  # ---- LayerNorm (HF GPT-2 style: γ, β, ε) -------------------------------
+  class LayerNorm
+    attr_accessor gamma: Array[Float]
+    attr_accessor beta:  Array[Float]
+    attr_accessor d:     Integer
+    attr_accessor eps:   Float
+
+    def initialize:  (Integer d) -> void
+    def forward:     (Mat x) -> Mat        # [T, D] → [T, D]
+    def summary:     () -> String
+    def param_count: () -> Integer
+  end
+
+  # ---- RMSNorm (Llama-family: γ only, no β) ------------------------------
+  class RMSNorm
+    attr_accessor gamma: Array[Float]
+    attr_accessor d:     Integer
+    attr_accessor eps:   Float
+
+    def initialize:  (Integer d) -> void
+    def forward:     (Mat x) -> Mat        # [T, D] → [T, D]
+    def summary:     () -> String
+    def param_count: () -> Integer
+  end
+
+  # ---- Linear (matmul + optional bias) -----------------------------------
+  class Linear
+    attr_accessor w:        Mat
+    attr_accessor b:        Array[Float]
+    attr_accessor has_bias: bool
+    attr_accessor in_dim:   Integer
+    attr_accessor out_dim:  Integer
+
+    def initialize:  (Integer in_dim, Integer out_dim, bool with_bias) -> void
+    def forward:     (Mat x) -> Mat        # [T, in_dim] → [T, out_dim]
+    def summary:     () -> String
+    def param_count: () -> Integer
+  end
+
+  # ---- Embedding (lookup table) ------------------------------------------
+  class Embedding
+    attr_accessor weight: Mat              # [V, D]
+    attr_accessor vocab:  Integer
+    attr_accessor d:      Integer
+
+    def initialize:  (Integer vocab, Integer d) -> void
+    def lookup:      (Array[Integer] ids)          -> Mat   # [T] → [T, D]
+    def slice:       (Integer start, Integer count) -> Mat   # rows [s, s+c)
+    def summary:     () -> String
+    def param_count: () -> Integer
+  end
+
+  # ---- CausalSelfAttention (HF GPT-2 multi-head, biased) -----------------
+  class CausalSelfAttention
+    attr_accessor w_q:      Array[Mat]     # length n_heads; each [D, Dh]
+    attr_accessor w_k:      Array[Mat]
+    attr_accessor w_v:      Array[Mat]
+    attr_accessor b_q:      Array[Array[Float]]
+    attr_accessor b_k:      Array[Array[Float]]
+    attr_accessor b_v:      Array[Array[Float]]
+    attr_accessor w_o:      Mat
+    attr_accessor b_o:      Array[Float]
+    attr_accessor d_model:  Integer
+    attr_accessor n_heads:  Integer
+    attr_accessor d_head:   Integer
+    attr_accessor inv_sqrt: Float
+
+    def initialize:  (Integer d_model, Integer n_heads) -> void
+    def forward:     (Mat x) -> Mat        # [T, D] → [T, D]
+    def head:        (Mat x, Integer h) -> Mat  # [T, D] → [T, Dh]
+    def summary:     () -> String
+    def param_count: () -> Integer
+  end
+
+  # ---- GQAttention (Llama-family grouped-query, RoPE-on-Q/K) -------------
+  class GQAttention
+    attr_accessor w_q:        Array[Mat]   # length n_heads
+    attr_accessor w_k:        Array[Mat]   # length n_kv
+    attr_accessor w_v:        Array[Mat]   # length n_kv
+    attr_accessor w_o:        Mat
+    attr_accessor n_heads:    Integer
+    attr_accessor n_kv:       Integer
+    attr_accessor d_model:    Integer
+    attr_accessor d_head:     Integer
+    attr_accessor group_size: Integer      # n_heads / n_kv
+    attr_accessor inv_sqrt:   Float
+    attr_accessor rope:       RoPE
+
+    def initialize:  (Integer d_model, Integer n_heads, Integer n_kv, RoPE rope_obj) -> void
+    def forward:     (Mat x, Integer pos_start) -> Mat       # [T, D] → [T, D]
+    def attend:      (Mat x, Integer hq, Mat k_h, Mat v_h, Integer pos_start) -> Mat
+    def summary:     () -> String
+    def param_count: () -> Integer
+  end
+
+  # ---- FFN (GPT-2 MLP: Linear → GeLU → Linear) ---------------------------
+  class FFN
+    attr_accessor w1:      Mat            # [D, Df]
+    attr_accessor w2:      Mat            # [Df, D]
+    attr_accessor b1:      Array[Float]
+    attr_accessor b2:      Array[Float]
+    attr_accessor d_model: Integer
+    attr_accessor d_ff:    Integer
+    attr_accessor act:     activation
+
+    def initialize:  (Integer d_model, Integer d_ff, activation act_sym) -> void
+    def forward:     (Mat x) -> Mat        # [T, D] → [T, D]
+    def summary:     () -> String
+    def param_count: () -> Integer
+  end
+
+  # ---- SwiGLU (Llama-family gated FFN, no biases) -----------------------
+  class SwiGLU
+    attr_accessor w_gate:  Mat            # [D, Df]
+    attr_accessor w_up:    Mat            # [D, Df]
+    attr_accessor w_down:  Mat            # [Df, D]
+    attr_accessor d_model: Integer
+    attr_accessor d_ff:    Integer
+
+    def initialize:  (Integer d_model, Integer d_ff) -> void
+    def forward:     (Mat x) -> Mat        # [T, D] → [T, D]
+    def summary:     () -> String
+    def param_count: () -> Integer
+  end
+
+  # ---- RoPE (rotate_half; precomputed cos/sin tables) --------------------
+  class RoPE
+    attr_accessor cos_tbl: Array[Float]
+    attr_accessor sin_tbl: Array[Float]
+    attr_accessor d_head:  Integer
+    attr_accessor max_seq: Integer
+
+    def initialize:  (Integer d_head, Integer max_seq, Float theta_base) -> void
+    # Rotates `x` in place. Row t corresponds to absolute position
+    # pos_start + t.
+    def rotate!:     (Mat x, Integer pos_start) -> void
+    def summary:     () -> String
+    def param_count: () -> Integer        # always 0 (cos/sin precomputed)
+  end
+
+  # ========================================================================
+  # GPT-2 model: HF-shape (LayerNorm + bias on everything, tied embed).
+  # (Lives in lib/toy_gpt2.rb.)
+  # ========================================================================
+  class GPT2Config
+    attr_accessor vocab:    Integer
+    attr_accessor d_model:  Integer
+    attr_accessor n_heads:  Integer
+    attr_accessor d_ff:     Integer
+    attr_accessor n_layers: Integer
+    attr_accessor ctx:      Integer
+
+    def initialize: (Integer, Integer, Integer, Integer, Integer, Integer) -> void
+  end
+
+  class GPT2Block
+    attr_accessor ln1:  LayerNorm
+    attr_accessor ln2:  LayerNorm
+    attr_accessor attn: CausalSelfAttention
+    attr_accessor ffn:  FFN
+
+    def initialize:  (GPT2Config cfg) -> void
+    def forward:     (Mat x) -> Mat        # [T, D] → [T, D]
+    def param_count: () -> Integer
+  end
+
+  class GPT2
+    attr_accessor cfg:         GPT2Config
+    attr_accessor token_embed: Embedding
+    attr_accessor pos_embed:   Embedding
+    attr_accessor stack:       Array[GPT2Block]    # length cfg.n_layers
+    attr_accessor final_norm:  LayerNorm
+
+    def initialize: (GPT2Config cfg) -> void
+    # ids: token IDs (length T), start_pos: absolute position of row 0.
+    # Returns logits of shape [T, V].
+    def forward:     (Array[Integer] ids, Integer start_pos) -> Mat
+    def param_count: () -> Integer
+    def describe:    () -> String
+  end
+
+  # ========================================================================
+  # SmolLM2 / Llama-family model.
+  # (Lives in lib/toy_smollm2.rb.)
+  # ========================================================================
+  class SmolLM2Config
+    attr_accessor vocab:     Integer
+    attr_accessor d_model:   Integer
+    attr_accessor n_heads:   Integer
+    attr_accessor n_kv:      Integer
+    attr_accessor d_ff:      Integer
+    attr_accessor n_layers:  Integer
+    attr_accessor ctx:       Integer
+    attr_accessor rope_base: Float
+    attr_accessor rms_eps:   Float
+
+    def initialize: (Integer, Integer, Integer, Integer, Integer,
+                     Integer, Integer, Float, Float) -> void
+    def self.smollm2_135m: () -> SmolLM2Config
+  end
+
+  class SmolLM2Block
+    attr_accessor rn1:  RMSNorm
+    attr_accessor rn2:  RMSNorm
+    attr_accessor attn: GQAttention
+    attr_accessor ffn:  SwiGLU
+
+    def initialize:  (SmolLM2Config cfg, RoPE rope_obj) -> void
+    # x: [T, D], pos_start: absolute position of row 0.
+    def forward:     (Mat x, Integer pos_start) -> Mat
+    def param_count: () -> Integer
+  end
+
+  class SmolLM2
+    attr_accessor cfg:               SmolLM2Config
+    attr_accessor token_embed:       Embedding
+    attr_accessor final_norm:        RMSNorm
+    attr_accessor stack:             Array[SmolLM2Block]   # length cfg.n_layers
+    attr_accessor rope:              RoPE
+    attr_accessor output_proj:       Mat                   # [V, D]; used only when untied
+    attr_accessor has_untied_output: bool
+
+    def initialize:               (SmolLM2Config cfg) -> void
+    def enable_untied_output!:    () -> void
+    # ids: token IDs (length T), pos_start: absolute position of row 0.
+    # Returns logits of shape [T, V].
+    def forward:                  (Array[Integer] ids, Integer pos_start) -> Mat
+    def param_count:              () -> Integer
+    def describe:                 () -> String
+  end
+
+  # ========================================================================
+  # Free-standing helpers.
+  # ========================================================================
+  def self.add_bias!:    (Mat x, Array[Float] b) -> void
+  def self.causal_mask!: (Mat scores) -> void
+  def self.softmax_rows!: (Mat m) -> void
+  def self.gelu_new:     (Mat x) -> Mat
+  def self.silu!:        (Mat m) -> void
+  def self.hadamard!:    (Mat dst, Mat src) -> void
+  def self.hstack_heads: (Array[Mat] per_head, Integer n_heads,
+                          Integer d_head, Integer d_model) -> Mat
+  def self.tap:          (String label, Mat x) -> Mat
+  def self.tap_info:     (String label, Mat x) -> Mat
+  def self.fmt_count:    (Integer n) -> String
+end

@@ -392,6 +392,13 @@ tinyllama_kv:        demos/tinyllama_kv
 demos/tinyllama_kv: demos/tinyllama_kv.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
+# Print the Phuong–Hutter algorithm cards for both models. No
+# inference — just emit the structured pseudocode. Source-of-truth
+# for the round-trip work (task #33).
+algorithm_cards:        demos/algorithm_cards
+demos/algorithm_cards: demos/algorithm_cards.rb lib/toy.rb lib/toy_gpt2.rb lib/toy_smollm2.rb lib/toy_gpt2_loader.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
 # train_pleasant: same TransformerLM training as train_tinystories,
 # but wrapped in Toy::Trainer (lib/toy_trainer.rb).
 train_pleasant:        demos/train_pleasant

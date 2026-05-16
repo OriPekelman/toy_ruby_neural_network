@@ -28,6 +28,8 @@ GGUFLoad.load_toy_smollm2(model, GGUF)
 puts ""
 puts model.describe
 puts ""
+puts model.algorithm_card
+puts ""
 
 # --- read prompt ids ---
 raw = ["?"]
