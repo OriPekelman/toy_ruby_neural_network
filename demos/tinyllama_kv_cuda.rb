@@ -34,6 +34,15 @@ GGUFLoad.load_toy_smollm2(model, GGUF)
 puts ""
 puts model.describe
 puts ""
+puts "DEBUG: has_untied_output=" + model.has_untied_output.to_s
+puts "DEBUG: output_proj shape=[" + model.output_proj.nrows.to_s + ", " + model.output_proj.ncols.to_s + "]"
+puts "DEBUG: output_proj.flat[0..4] = " + model.output_proj.flat[0].to_s + ", " +
+     model.output_proj.flat[1].to_s + ", " + model.output_proj.flat[2].to_s + ", " +
+     model.output_proj.flat[3].to_s + ", " + model.output_proj.flat[4].to_s
+puts "DEBUG: token_embed.flat[0..4] = " + model.token_embed.weight.flat[0].to_s + ", " +
+     model.token_embed.weight.flat[1].to_s + ", " + model.token_embed.weight.flat[2].to_s + ", " +
+     model.token_embed.weight.flat[3].to_s + ", " + model.token_embed.weight.flat[4].to_s
+puts ""
 
 puts "realizing KV cache (MAX_T=" + MAX_T.to_s + ")..."
 kv = SmolLM2KVFFICacheCuda.new
