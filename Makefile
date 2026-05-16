@@ -375,7 +375,7 @@ demos/smollm2_kv: demos/smollm2_kv.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smol
 
 # CUDA mirror.
 smollm2_kv_cuda:        demos/smollm2_kv_cuda
-demos/smollm2_kv_cuda: demos/smollm2_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
+demos/smollm2_kv_cuda: demos/smollm2_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
 	$(SPINEL) $< -o $@
 
 # train_pleasant: same TransformerLM training as train_tinystories,
@@ -444,7 +444,7 @@ tinynn/gpt2_kv_parity: tinynn/gpt2_kv_parity.rb lib/transformer.rb lib/gpt2.rb l
 
 CUDA_GPT2_DEPS = lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb \
                  lib/training.rb lib/tinynn.rb lib/tinynn_cuda.rb \
-                 tinynn/libtinynn_ggml_cuda.a
+                 tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
 
 demos/distilgpt2_demo_ffi_cuda: demos/distilgpt2_demo_ffi_cuda.rb lib/gpt2_ffi_cuda.rb $(CUDA_GPT2_DEPS)
 	$(SPINEL) $< -o $@
