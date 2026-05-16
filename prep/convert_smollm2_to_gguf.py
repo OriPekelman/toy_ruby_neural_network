@@ -53,12 +53,39 @@ OUT     = Path("data/smollm2-135m-f32.gguf")
 CACHE   = Path("prep/_hf_cache")
 
 
+def is_quantizable(name: str, shape) -> bool:
+    """Quantize 2-D weight tensors. Keep embeddings + 1-D norms + 1-D
+    biases in f32: embeddings are gathered (no matmul savings to quantize);
+    norms are tiny and quantizing hurts more than it saves."""
+    if len(shape) < 2:
+        return False
+    if "embd" in name and "weight" in name:
+        return False           # token_embd, position_embd
+    if "output_norm" in name or "attn_norm" in name or "ffn_norm" in name:
+        return False
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo-id", default=REPO_ID)
     ap.add_argument("--out",     default=str(OUT))
     ap.add_argument("--cache",   default=str(CACHE))
+    ap.add_argument("--quantize", choices=["", "q8_0", "q4_0", "q5_0"],
+                    default="",
+                    help="Quantize 2-D weight tensors (legacy quantizers via "
+                         "gguf-py). q8_0 (~4× smaller, ~1% noise), q4_0 "
+                         "(~8× smaller, ~3-5% noise), q5_0 (in between). "
+                         "Embeddings, biases, and norms stay f32. K-quants "
+                         "(Q4_K_M etc.) need ggml's C-side quantizer.")
     args = ap.parse_args()
+
+    qtype = None
+    qmap = {"q8_0": gguf.GGMLQuantizationType.Q8_0,
+            "q4_0": gguf.GGMLQuantizationType.Q4_0,
+            "q5_0": gguf.GGMLQuantizationType.Q5_0}
+    if args.quantize:
+        qtype = qmap[args.quantize]
 
     os.makedirs(args.cache,            exist_ok=True)
     os.makedirs(Path(args.out).parent, exist_ok=True)
@@ -132,12 +159,24 @@ def main():
     w.add_rope_freq_base(rope_theta)
     w.add_rope_dimension_count(d_head)
     w.add_layer_norm_rms_eps(rms_eps)
-    w.add_file_type(gguf.LlamaFileType.ALL_F32)
+    w.add_file_type(gguf.LlamaFileType.ALL_F32)  # file_type metadata is informational
     w.add_uint32("llama.vocab_size", n_vocab)
 
+    # Quantize 2-D weight tensors when --quantize is set. add() wraps
+    # w.add_tensor so quantization is transparent at the call sites.
+    def add(name: str, data: np.ndarray):
+        if qtype is not None and is_quantizable(name, data.shape):
+            try:
+                quantized_bytes = gguf.quantize(data, qtype)
+                w.add_tensor(name, quantized_bytes, raw_dtype=qtype)
+                return
+            except (gguf.quants.QuantError, ValueError) as e:
+                print(f"      [skip-quant {name} {data.shape}: {e}]")
+        w.add_tensor(name, data)
+
     # Globals
-    w.add_tensor("token_embd.weight",  take("model.embed_tokens.weight"))   # [V, D]
-    w.add_tensor("output_norm.weight", take("model.norm.weight"))           # [D]
+    add("token_embd.weight",  take("model.embed_tokens.weight"))   # [V, D]
+    add("output_norm.weight", take("model.norm.weight"))           # [D]
 
     # Untied output projection (`lm_head.weight`) when present.
     # SmolLM2 doesn't have it (tied embeddings). TinyLlama and other
@@ -148,7 +187,7 @@ def main():
     # also [V, D] and we already matmul_t against it).
     if "lm_head.weight" in blobs:
         print(f"      lm_head.weight present (untied embeddings)")
-        w.add_tensor("output.weight", take("lm_head.weight"))               # [V, D]
+        add("output.weight", take("lm_head.weight"))               # [V, D]
 
     # Per-block
     for li in range(n_layer):
@@ -156,25 +195,25 @@ def main():
         out = f"blk.{li}"
 
         # RMSNorms (1-D, no transpose)
-        w.add_tensor(f"{out}.attn_norm.weight", take(f"{hf}.input_layernorm.weight"))
-        w.add_tensor(f"{out}.ffn_norm.weight",  take(f"{hf}.post_attention_layernorm.weight"))
+        add(f"{out}.attn_norm.weight", take(f"{hf}.input_layernorm.weight"))
+        add(f"{out}.ffn_norm.weight",  take(f"{hf}.post_attention_layernorm.weight"))
 
         # Attention projections (all transposed: HF stores [out, in])
         #   q_proj: HF [n_heads*Dh, D]  →  ours [D, n_heads*Dh]   (= [D, D] for SmolLM2)
         #   k_proj: HF [n_kv*Dh,   D]  →  ours [D, n_kv*Dh]
         #   v_proj: HF [n_kv*Dh,   D]  →  ours [D, n_kv*Dh]
         #   o_proj: HF [D, D]          →  ours [D, D]
-        w.add_tensor(f"{out}.attn_q.weight",      take_T(f"{hf}.self_attn.q_proj.weight"))
-        w.add_tensor(f"{out}.attn_k.weight",      take_T(f"{hf}.self_attn.k_proj.weight"))
-        w.add_tensor(f"{out}.attn_v.weight",      take_T(f"{hf}.self_attn.v_proj.weight"))
-        w.add_tensor(f"{out}.attn_output.weight", take_T(f"{hf}.self_attn.o_proj.weight"))
+        add(f"{out}.attn_q.weight",      take_T(f"{hf}.self_attn.q_proj.weight"))
+        add(f"{out}.attn_k.weight",      take_T(f"{hf}.self_attn.k_proj.weight"))
+        add(f"{out}.attn_v.weight",      take_T(f"{hf}.self_attn.v_proj.weight"))
+        add(f"{out}.attn_output.weight", take_T(f"{hf}.self_attn.o_proj.weight"))
 
         # SwiGLU FFN (all transposed)
         #   gate_proj / up_proj: HF [d_ff, D]  →  ours [D, d_ff]
         #   down_proj:           HF [D, d_ff] →  ours [d_ff, D]
-        w.add_tensor(f"{out}.ffn_gate.weight", take_T(f"{hf}.mlp.gate_proj.weight"))
-        w.add_tensor(f"{out}.ffn_up.weight",   take_T(f"{hf}.mlp.up_proj.weight"))
-        w.add_tensor(f"{out}.ffn_down.weight", take_T(f"{hf}.mlp.down_proj.weight"))
+        add(f"{out}.ffn_gate.weight", take_T(f"{hf}.mlp.gate_proj.weight"))
+        add(f"{out}.ffn_up.weight",   take_T(f"{hf}.mlp.up_proj.weight"))
+        add(f"{out}.ffn_down.weight", take_T(f"{hf}.mlp.down_proj.weight"))
 
     print(f"[4/4] finalising")
     w.write_header_to_file()
