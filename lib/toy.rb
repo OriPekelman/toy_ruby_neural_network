@@ -1,4 +1,4 @@
-# lib/toy.rb — pleasant transformer building blocks.
+# lib/toy.rb — transformer building blocks.
 #
 # A thin sugar layer on top of Mat (lib/transformer.rb). Each class
 # here owns its own parameters as ivars and has one entry point —

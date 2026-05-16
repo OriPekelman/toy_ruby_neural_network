@@ -1,12 +1,9 @@
-# demos/gpt2_pleasant.rb — DistilGPT2 inference using the Toy:: sugar.
+# demos/gpt2.rb — DistilGPT2 / GPT-2 inference through Toy::GPT2.
 #
-# Mirrors distilgpt2_demo.rb but built on top of Toy::GPT2 (lib/toy_gpt2.rb).
-# The whole model fits in ~20 lines of Ruby; this demo glues
-# GGUF-load → forward → greedy-argmax → repeat.
-#
-# Reads pre-tokenized prompt IDs from data/prompt_ids.txt (see
-# prep/tokens.py for the producer side). Writes the full ID sequence
-# back so prep/tokens.py can decode it.
+# Native Mat forward (no FFI). Reads pre-tokenized prompt IDs from
+# data/prompt_ids.txt (see prep/tokens.py), runs greedy generation,
+# writes the full ID sequence back. The model itself is ~80 lines
+# of Ruby in lib/toy_gpt2.rb; this demo is the glue.
 
 require_relative "../lib/toy"
 require_relative "../lib/toy_gpt2"

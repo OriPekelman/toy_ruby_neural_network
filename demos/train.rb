@@ -1,12 +1,9 @@
-# demos/train_pleasant.rb — TinyStories training via Toy::Trainer.
+# demos/train.rb — TinyStories from-scratch training via Toy::Trainer.
 #
-# Same model + dataset as demos/train_tinystories.rb. The training loop
-# is the readable bit: configure → loop → step → log. The Trainer
-# absorbs (grads.fill_zero → forward → backward → optimizer.step) into
-# one call.
-#
-# Compare side-by-side with demos/train_tinystories.rb to see the
-# difference in syntactic noise.
+# Configure → loop → step → log. The Trainer (lib/toy_trainer.rb)
+# absorbs the (grads.fill_zero → forward → backward → optimizer.step)
+# per-step boilerplate into one verb, so the outer epoch/sequence
+# loop stays visible — what you're reading IS the training algorithm.
 
 require_relative "../lib/transformer"
 require_relative "../lib/training"

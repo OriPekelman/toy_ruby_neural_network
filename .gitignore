@@ -1,19 +1,5 @@
 # Spinel-compiled binaries (demos/ holds the Ruby sources; binaries
 # are ignored so a fresh checkout doesn't carry stale builds).
-demos/train_minimal
-demos/train_minimal_ffi
-demos/train_tinystories
-demos/inference_demo
-demos/inference_demo_cuda
-demos/distilgpt2_demo
-demos/distilgpt2_demo_ffi
-demos/distilgpt2_demo_kv
-demos/distilgpt2_demo_text
-demos/distilgpt2_demo_ffi_cuda
-demos/distilgpt2_demo_kv_cuda
-demos/gpt2_pleasant
-demos/train_pleasant
-demos/smollm2_pleasant
 demos/smollm2_kv
 demos/smollm2_kv_cuda
 demos/tinyllama_kv_cuda
@@ -23,10 +9,8 @@ data/smollm2_prompt_ids.txt
 # Generated C from `spinel -c` at the repo root only — the tinynn/ shim
 # has hand-written .c sources that must stay tracked.
 /*.c
-
 # Vendored ggml source + build dirs (re-clone via `make setup-ggml`)
 vendor/
-
 # Data: regenerable artifacts (corpus, models, BPE tables, prompts,
 # logits dumps). Created by prep/ scripts.
 data/ts_*.txt
@@ -43,11 +27,9 @@ data/gpt2-bpe-vocab.tsv
 data/gpt2-bpe-merges.tsv
 data/gpt2-bpe-bytechars.tsv
 prep/_hf_cache/
-
 # tinynn shim build artifacts
 tinynn/*.o
 tinynn/*.a
-
 # tinynn smoke / bench binaries (all built by `make ab-smoke-*` etc.)
 tinynn/smoke
 tinynn/ab_smoke
@@ -102,10 +84,8 @@ tinynn/bpe_smoke
 tinynn/bpe_debug
 tinynn/ab_smoke_silu
 tinynn/ab_smoke_mul
-
 # But DO track tinynn/README.md (the FFI bridge doc)
 !tinynn/README.md
-
 # tep_demo build artifacts (sources committed; binaries + scratch ignored)
 tep_demo/hello
 tep_demo/api
@@ -115,16 +95,18 @@ tep_demo/.*.tep.rb
 tep_demo/.openai_api.combined.rb
 tep_demo/.openai_api.tep.rb
 tep_demo/_tep_lib/
-
 # Stale local scratch (debugger state, old prep input)
 .rdbgrc.breakpoints
 input.txt
 tinynn/toy_llama_smoke
-
 # OS / agent scratch
 .DS_Store
 .claude/
-demos/tinyllama_native
 demos/tinyllama_kv
 demos/algorithm_cards
 data/_cards/
+demos/gpt2
+demos/smollm2
+demos/train
+demos/tinyllama
+docs/references/

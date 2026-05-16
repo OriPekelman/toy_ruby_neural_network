@@ -1,9 +1,9 @@
-# demos/smollm2_pleasant.rb — SmolLM2-135M inference via Toy::SmolLM2.
+# demos/smollm2.rb — SmolLM2-135M inference through Toy::SmolLM2.
 #
-# Mirrors demos/gpt2_pleasant.rb: load GGUF → greedy generate.
-# Tokenization is host-side via prep/smollm2_tokens.py:
+# Native Mat forward (no FFI). Mirrors demos/gpt2.rb. Tokenization
+# is host-side via prep/smollm2_tokens.py:
 #   ./prep/smollm2_tokens.py encode "Once upon a time"
-#   ./demos/smollm2_pleasant
+#   ./demos/smollm2
 #   ./prep/smollm2_tokens.py decode
 
 require_relative "../lib/toy"

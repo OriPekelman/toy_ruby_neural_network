@@ -43,32 +43,9 @@ CUDA_DIR    ?= /usr/local/cuda
 # Source lives in demos/. We expose short top-level target names
 # (`make train_minimal`, `make distilgpt2_demo_text`) that build into
 # demos/. Run the resulting binaries from the repo root.
-all: demos/train_minimal demos/train_tinystories
+all: demos/train demos/smollm2
 
-train_minimal:        demos/train_minimal
-train_tinystories:    demos/train_tinystories
-inference_demo:       demos/inference_demo
-inference_demo_cuda:  demos/inference_demo_cuda
-distilgpt2_demo:           demos/distilgpt2_demo
-distilgpt2_demo_ffi:       demos/distilgpt2_demo_ffi
-distilgpt2_demo_kv:        demos/distilgpt2_demo_kv
-distilgpt2_demo_text:      demos/distilgpt2_demo_text
-distilgpt2_demo_ffi_cuda:  demos/distilgpt2_demo_ffi_cuda
-distilgpt2_demo_kv_cuda:   demos/distilgpt2_demo_kv_cuda
-
-demos/train_minimal: demos/train_minimal.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
-	$(SPINEL) $< -o $@
-
-demos/train_tinystories: demos/train_tinystories.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
-	$(SPINEL) $< -o $@
-
-# Inference demo: greedy autoregressive generation via FullForwardFFICache.
 # Parity-checks vs native TransformerLM.forward.
-demos/inference_demo: demos/inference_demo.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
-	$(SPINEL) $< -o $@
-
-demos/inference_demo_cuda: demos/inference_demo_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml_cuda.a
-	$(SPINEL) $< -o $@
 
 # Tep+Spinel HTTP server demos. See tep_demo/README.md. Builds bypass
 # tep's translator (we use spinel directly on a layout-substituted
@@ -349,31 +326,28 @@ gpt2-load-smoke: tinynn/gpt2_load_smoke
 tinynn/gpt2_load_smoke: tinynn/gpt2_load_smoke.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tinynn/gpt2_load_smoke.rb -o tinynn/gpt2_load_smoke
 
-# End-to-end distilgpt2 inference demo. Reads pre-tokenized IDs from
 # data/prompt_ids.txt, loads weights from data/distilgpt2-f32.gguf,
 # greedy-generates N_NEW tokens via native Mat forward, writes the
 # full ID sequence back. Decode with prep/tokens.py decode.
-demos/distilgpt2_demo: demos/distilgpt2_demo.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
-	$(SPINEL) $< -o $@
 
-# Pleasant-API equivalent of distilgpt2_demo: same I/O contract,
-# 60 lines of glue + Toy::GPT2 (lib/toy_gpt2.rb).
-gpt2_pleasant:        demos/gpt2_pleasant
-demos/gpt2_pleasant: demos/gpt2_pleasant.rb lib/toy.rb lib/toy_gpt2.rb lib/toy_gpt2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+# Native Mat GPT-2 inference (DistilGPT2 / GPT-2 family).
+#
+gpt2:        demos/gpt2
+demos/gpt2: demos/gpt2.rb lib/toy.rb lib/toy_gpt2.rb lib/toy_gpt2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 # SmolLM2-135M (llama-family) inference via Toy::SmolLM2.
 # Tokenization is host-side: ./prep/smollm2_tokens.py encode "..."
-smollm2_pleasant:        demos/smollm2_pleasant
-demos/smollm2_pleasant: demos/smollm2_pleasant.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+smollm2:        demos/smollm2
+demos/smollm2: demos/smollm2.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
-# SmolLM2-135M FFI KV-cache demo (the perf path; mirror of distilgpt2_demo_kv).
+# SmolLM2-135M FFI KV-cache (CPU).
 smollm2_kv:        demos/smollm2_kv
 demos/smollm2_kv: demos/smollm2_kv.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
-# CUDA mirror.
+# SmolLM2-135M FFI KV-cache (CUDA).
 smollm2_kv_cuda:        demos/smollm2_kv_cuda
 demos/smollm2_kv_cuda: demos/smollm2_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
 	$(SPINEL) $< -o $@
@@ -384,8 +358,8 @@ tinyllama_kv_cuda:        demos/tinyllama_kv_cuda
 demos/tinyllama_kv_cuda: demos/tinyllama_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
 	$(SPINEL) $< -o $@
 
-tinyllama_native:        demos/tinyllama_native
-demos/tinyllama_native: demos/tinyllama_native.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+tinyllama:        demos/tinyllama
+demos/tinyllama: demos/tinyllama.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 tinyllama_kv:        demos/tinyllama_kv
@@ -399,23 +373,10 @@ algorithm_cards:        demos/algorithm_cards
 demos/algorithm_cards: demos/algorithm_cards.rb lib/toy.rb lib/toy_gpt2.rb lib/toy_smollm2.rb lib/toy_gpt2_loader.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
-# train_pleasant: same TransformerLM training as train_tinystories,
-# but wrapped in Toy::Trainer (lib/toy_trainer.rb).
-train_pleasant:        demos/train_pleasant
-demos/train_pleasant: demos/train_pleasant.rb lib/toy_trainer.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
-	$(SPINEL) $< -o $@
-
-# FFI persistent-graph variant of distilgpt2_demo. Same I/O contract.
-demos/distilgpt2_demo_ffi: demos/distilgpt2_demo_ffi.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
-	$(SPINEL) $< -o $@
-
-# KV-cache variant: per-step decode (constant in prompt length).
-demos/distilgpt2_demo_kv: demos/distilgpt2_demo_kv.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi_kv.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
-	$(SPINEL) $< -o $@
-
-# Fully self-contained variant: Ruby BPE encode/decode in-process.
-# Reads a text prompt from data/prompt.txt; no Python at runtime.
-demos/distilgpt2_demo_text: demos/distilgpt2_demo_text.rb lib/transformer.rb lib/gpt2.rb lib/gpt2_ffi_kv.rb lib/gguf_load.rb lib/bpe.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+# TinyStories from-scratch training via Toy::Trainer.
+#
+train:        demos/train
+demos/train: demos/train.rb lib/toy_trainer.rb lib/transformer.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 # Parity probe: one forward at distilgpt2 shape, dump last-row logits
@@ -466,12 +427,6 @@ tinynn/gpt2_kv_parity: tinynn/gpt2_kv_parity.rb lib/transformer.rb lib/gpt2.rb l
 CUDA_GPT2_DEPS = lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb \
                  lib/training.rb lib/tinynn.rb lib/tinynn_cuda.rb \
                  tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
-
-demos/distilgpt2_demo_ffi_cuda: demos/distilgpt2_demo_ffi_cuda.rb lib/gpt2_ffi_cuda.rb $(CUDA_GPT2_DEPS)
-	$(SPINEL) $< -o $@
-
-demos/distilgpt2_demo_kv_cuda: demos/distilgpt2_demo_kv_cuda.rb lib/gpt2_ffi_kv_cuda.rb $(CUDA_GPT2_DEPS)
-	$(SPINEL) $< -o $@
 
 gpt2-ffi-parity-cuda: tinynn/gpt2_ffi_parity_cuda
 	./tinynn/gpt2_ffi_parity_cuda
@@ -584,11 +539,9 @@ distclean: clean
 
 .PHONY: all clean distclean setup-ggml setup-ggml-cuda smoke \
         ab-smoke ab-smoke-add ab-smoke-gelu ab-smoke-rms-norm \
-        ab-smoke-softmax ab-smoke-transpose ab-smoke-scale \
-        ab-smoke-pipeline ab-smoke-big ab-smoke-cuda ab-smoke-all-cuda \
-        ab-smoke-big-cuda test \
-        train_minimal train_tinystories inference_demo inference_demo_cuda \
-        distilgpt2_demo distilgpt2_demo_ffi distilgpt2_demo_kv \
-        distilgpt2_demo_text distilgpt2_demo_ffi_cuda distilgpt2_demo_kv_cuda \
-        gpt2_pleasant train_pleasant smollm2_pleasant smollm2_kv smollm2_kv_cuda \
-        tinyllama_kv_cuda
+        ab-smoke-softmax ab-smoke-transpose ab-smoke-scale ab-smoke-silu \
+        ab-smoke-mul ab-smoke-pipeline ab-smoke-big ab-smoke-cuda \
+        ab-smoke-all-cuda ab-smoke-big-cuda test \
+        gpt2 smollm2 smollm2_kv smollm2_kv_cuda \
+        tinyllama tinyllama_kv tinyllama_kv_cuda \
+        train algorithm_cards

@@ -1,4 +1,4 @@
-# lib/toy_trainer.rb — Toy::Trainer: pleasant training loop.
+# lib/toy_trainer.rb — Toy::Trainer: training-loop wrapper.
 #
 # Wraps the existing Gradients + Adam + LRSchedule machinery so a training
 # script can read like a Sinatra app: configure a handful of knobs, then
