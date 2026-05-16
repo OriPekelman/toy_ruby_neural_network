@@ -84,7 +84,7 @@ class SmolLM2KVFFICacheCuda
     @rope_base  = rope_base
     @rms_eps    = rms_eps
 
-    @sess               = TinyNNCuda.tnn_session_new(0)
+    @sess               = TinyNNCuda.tnn_session_new(1)   # 1 = prefer CUDA
     @t_token_embed      = TinyNNCuda.tnn_input_2d_f32_persistent(@sess, vocab_size, d_model)
     @t_final_norm_gamma = TinyNNCuda.tnn_input_1d_f32_persistent(@sess, d_model)
 
