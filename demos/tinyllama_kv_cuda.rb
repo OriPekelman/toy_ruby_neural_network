@@ -79,6 +79,14 @@ while n < N_NEW
   pos = ids.length
   last_id = ids[pos - 1]
   logits = SmolLM2KVCuda.decode_step(kv, last_id, pos)
+  if n == 0
+    puts "DEBUG: first decode logits [0..9] = " +
+         logits.flat[0].to_s + ", " + logits.flat[1].to_s + ", " +
+         logits.flat[2].to_s + ", " + logits.flat[3].to_s + ", " +
+         logits.flat[4].to_s + ", " + logits.flat[5].to_s + ", " +
+         logits.flat[6].to_s + ", " + logits.flat[7].to_s + ", " +
+         logits.flat[8].to_s + ", " + logits.flat[9].to_s
+  end
   best_i = 0
   best_v = logits.flat[0]
   j = 1
