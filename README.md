@@ -199,13 +199,15 @@ against PyTorch `transformers` at F32 precision. Numbers in
 [`HF_GPT2.md`](HF_GPT2.md). The `Toy::SmolLM2` path is currently
 native-only — the FFI mirror is on the todo list.
 
-Fresh gx10 numbers (NVIDIA GB10), 2026-05-16:
+Fresh numbers, 2026-05-16:
 
-| Model | Path | Per-token | Tok/s |
-|---|---|---:|---:|
-| gpt2-small (124M) | FFI KV-cache, ggml-CUDA | 9.3 ms | 107 |
-| distilgpt2 (82M)  | native Mat (Ruby)        | 595 ms |  1.7 |
-| SmolLM2-135M      | native Mat (Ruby)        | 876 ms |  1.1 |
+| Model | Path | Where | Per-token | Tok/s |
+|---|---|---|---:|---:|
+| SmolLM2-135M | FFI KV-cache (Mac CPU)         | M2 Air | 13.0 ms |  77 |
+| SmolLM2-135M | FFI KV-cache (gx10 ggml-CUDA)  | GB10   | 11.2 ms |  89 |
+| gpt2-small   | FFI KV-cache (gx10 ggml-CUDA)  | GB10   |  8.9 ms | 112 |
+| SmolLM2-135M | native Mat (Mac CPU)           | M2 Air | 2654 ms | 0.4 |
+| SmolLM2-135M | native Mat (gx10 CPU)          | gx10   |  876 ms | 1.1 |
 
 Full bench in [`docs/bench-gx10-2026-05-16.md`](docs/bench-gx10-2026-05-16.md).
 
