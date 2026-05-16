@@ -378,6 +378,12 @@ smollm2_kv_cuda:        demos/smollm2_kv_cuda
 demos/smollm2_kv_cuda: demos/smollm2_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
 	$(SPINEL) $< -o $@
 
+# TinyLlama-1.1B demo. Uses the same Toy::SmolLM2 / FFI KV CUDA stack
+# (llama-family architecture); just configured for the larger shape.
+tinyllama_kv_cuda:        demos/tinyllama_kv_cuda
+demos/tinyllama_kv_cuda: demos/tinyllama_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
+	$(SPINEL) $< -o $@
+
 # train_pleasant: same TransformerLM training as train_tinystories,
 # but wrapped in Toy::Trainer (lib/toy_trainer.rb).
 train_pleasant:        demos/train_pleasant
@@ -569,4 +575,5 @@ distclean: clean
         train_minimal train_tinystories inference_demo inference_demo_cuda \
         distilgpt2_demo distilgpt2_demo_ffi distilgpt2_demo_kv \
         distilgpt2_demo_text distilgpt2_demo_ffi_cuda distilgpt2_demo_kv_cuda \
-        gpt2_pleasant train_pleasant smollm2_pleasant smollm2_kv smollm2_kv_cuda
+        gpt2_pleasant train_pleasant smollm2_pleasant smollm2_kv smollm2_kv_cuda \
+        tinyllama_kv_cuda
