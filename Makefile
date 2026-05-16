@@ -384,6 +384,10 @@ tinyllama_kv_cuda:        demos/tinyllama_kv_cuda
 demos/tinyllama_kv_cuda: demos/tinyllama_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
 	$(SPINEL) $< -o $@
 
+tinyllama_native:        demos/tinyllama_native
+demos/tinyllama_native: demos/tinyllama_native.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
 # train_pleasant: same TransformerLM training as train_tinystories,
 # but wrapped in Toy::Trainer (lib/toy_trainer.rb).
 train_pleasant:        demos/train_pleasant
