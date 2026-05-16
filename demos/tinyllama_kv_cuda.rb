@@ -46,9 +46,13 @@ puts ""
 
 puts "realizing KV cache (MAX_T=" + MAX_T.to_s + ")..."
 kv = SmolLM2KVFFICacheCuda.new
+# TEMP DEBUG: force tied path even though model is untied — to isolate
+# whether the bug is in the untied wiring vs everywhere.
+force_tied = true
 kv.realize_for(MAX_T, cfg.d_model, cfg.d_ff, cfg.n_heads, cfg.n_kv,
                 cfg.n_layers, cfg.vocab, cfg.rope_base, cfg.rms_eps,
-                model.has_untied_output)
+                force_tied ? false : model.has_untied_output)
+puts "DEBUG: kv.has_untied_output=" + kv.has_untied_output.to_s
 t0 = Time.now
 SmolLM2KVCuda.upload_from(kv, model)
 puts "  uploaded weights in " + ((Time.now - t0) * 1000.0).to_s + " ms"
