@@ -141,8 +141,7 @@ class SmolLM2KVFFICache
       li = li + 1
     end
 
-    rc = TinyNN.tnn_finalize_weights(@sess)
-    puts "  tnn_finalize_weights rc=" + rc.to_s
+    TinyNN.tnn_finalize_weights(@sess)
     @realized = true
   end
 

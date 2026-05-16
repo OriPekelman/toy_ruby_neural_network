@@ -141,8 +141,7 @@ class SmolLM2KVFFICacheCuda
       li = li + 1
     end
 
-    rc = TinyNNCuda.tnn_finalize_weights(@sess)
-    puts "  tnn_finalize_weights rc=" + rc.to_s
+    TinyNNCuda.tnn_finalize_weights(@sess)
     @realized = true
   end
 
