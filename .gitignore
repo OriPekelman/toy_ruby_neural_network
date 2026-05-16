@@ -125,3 +125,4 @@ tinynn/toy_llama_smoke
 .DS_Store
 .claude/
 demos/tinyllama_native
+demos/tinyllama_kv

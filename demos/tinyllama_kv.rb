@@ -1,6 +1,6 @@
-# demos/tinyllama_kv_cuda.rb — TinyLlama-1.1B inference via the FFI KV-cache (CUDA).
+# demos/tinyllama_kv_cpu.rb — TinyLlama-1.1B inference via the FFI KV-cache (CUDA).
 #
-# Uses Toy::SmolLM2 / SmolLM2KVFFICacheCuda — they're already the
+# Uses Toy::SmolLM2 / SmolLM2KVFFICache — they're already the
 # llama-family architecture, just configured differently here:
 #   d_model=2048, n_layers=22, n_heads=32, n_kv=4, d_ff=5632,
 #   vocab=32000, ctx=2048, rope_base=10000, untied embeddings.
@@ -12,7 +12,7 @@
 require_relative "../lib/toy"
 require_relative "../lib/toy_smollm2"
 require_relative "../lib/toy_smollm2_loader"
-require_relative "../lib/toy_smollm2_ffi_kv_cuda"
+require_relative "../lib/toy_smollm2_ffi_kv"
 require_relative "../lib/training"   # parse_ids
 
 GGUF     = "data/tinyllama-1.1b-f32.gguf"
@@ -45,12 +45,12 @@ puts "DEBUG: token_embed.flat[0..4] = " + model.token_embed.weight.flat[0].to_s 
 puts ""
 
 puts "realizing KV cache (MAX_T=" + MAX_T.to_s + ")..."
-kv = SmolLM2KVFFICacheCuda.new
+kv = SmolLM2KVFFICache.new
 kv.realize_for(MAX_T, cfg.d_model, cfg.d_ff, cfg.n_heads, cfg.n_kv,
                 cfg.n_layers, cfg.vocab, cfg.rope_base, cfg.rms_eps,
                 model.has_untied_output)
 t0 = Time.now
-SmolLM2KVCuda.upload_from(kv, model)
+SmolLM2KV.upload_from(kv, model)
 puts "  uploaded weights in " + ((Time.now - t0) * 1000.0).to_s + " ms"
 
 raw = ["?"]
@@ -65,7 +65,7 @@ puts "prefilling " + ids.length.to_s + " prompt tokens..."
 t0 = Time.now
 i = 0
 while i < ids.length
-  SmolLM2KVCuda.decode_step(kv, ids[i], i)
+  SmolLM2KV.decode_step(kv, ids[i], i)
   i = i + 1
 end
 prefill_ms = (Time.now - t0) * 1000.0
@@ -78,7 +78,7 @@ n = 0
 while n < N_NEW
   pos = ids.length
   last_id = ids[pos - 1]
-  logits = SmolLM2KVCuda.decode_step(kv, last_id, pos)
+  logits = SmolLM2KV.decode_step(kv, last_id, pos)
   if n == 0
     puts "DEBUG: first decode logits [0..9] = " +
          logits.flat[0].to_s + ", " + logits.flat[1].to_s + ", " +
