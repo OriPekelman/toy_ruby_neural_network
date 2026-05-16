@@ -99,17 +99,53 @@ mechanisms:
 * Compute-graph buffer / scratch sizing crosses some threshold at
   specific node counts.
 
-## Next debugging step (when revisited)
+## Diagnosis: f32 precision overflow
 
-1. Verify by setting `cfg.n_layers = 5` *but* skip the actual ggml
-   compute for layer 4 (return identity). If NaN goes away, layer
-   4's compute IS the trigger, but only at that total count.
-2. Print `model.stack[i].rn1.gamma[0]` and other selected values for
-   each layer at L=5 vs L=10 to confirm same weights were loaded.
-3. Add an intermediate `tnn_set_output` after layer 0, layer 2, etc.
-   and compare downloaded activations across runs.
-4. Check `model.norm.weight` (gamma=3.188 max value) doesn't compound
-   abnormally in the FFI graph.
+Final bisection result:
 
-Until then: SmolLM2-135M remains the bench-of-record for the
-llama-family FFI throughput numbers.
+| Path | Precision | L=5 result |
+|---|---|---|
+| `demos/tinyllama_native` (native Mat)  | f64 | finite (argmax=20358, max=3.27) |
+| `demos/tinyllama_kv` (CPU FFI / ggml)  | f32 | NaN |
+| `demos/tinyllama_kv_cuda` (ggml-CUDA)  | f32 | NaN |
+
+Same model, same weights, same input. The only difference is the
+compute precision. f64 has range ~1.8e308; f32 caps at 3.4e38.
+
+TinyLlama-1.1B-Chat-v1.0 produces intermediate activations at L=5
+that exceed f32 range. The non-monotonic pattern (L=5 NaN, L=6 zeros,
+L=10 finite) reflects how subsequent layers re-normalize activations:
+adding more RMSNorms brings magnitudes back into f32 range, but
+truncating *exactly* at certain depths catches them mid-overflow.
+
+L=6 producing all-zero logits is consistent: if rms_norm sees a
+vector containing inf values, sumsq overflows to +inf, 1/sqrt(inf)
+= 0, output = x * 0 = 0. From there, every downstream value is 0.
+
+L=5 producing NaN: presumably layer 4's output has finite (but
+huge) values; the final unembed matmul over 32k vocab × 2048
+features overflows during accumulation, +inf - inf later = NaN.
+
+This is a *known* phenomenon in some llama-family checkpoints —
+specific layers develop "outlier features" with magnitudes that
+need >f32 precision to compute stably. Quantization formats
+(GGUF Q8_0, Q4_K) include per-block scale factors that effectively
+normalize the dynamic range; running TinyLlama from a quantized
+GGUF would likely avoid this entirely. SmolLM2-135M doesn't hit
+the issue because its smaller weight magnitudes stay within f32
+headroom even at full depth.
+
+## Workarounds
+
+1. **Use the native Mat path for full TinyLlama** (`demos/tinyllama_native`)
+   — slow (~4.5 s/token on gx10 CPU) but numerically correct.
+2. **SmolLM2-135M remains the canonical FFI benchmark** for the
+   llama family in this project. Its activations stay in f32 range
+   end-to-end.
+3. **Quantized TinyLlama (future)** would likely sidestep the issue.
+   Needs: extend `prep/convert_smollm2_to_gguf.py` with the same
+   `--quantize q8_0` flag the GPT-2 converter has, then test through
+   `demos/tinyllama_kv_cuda`. Quantization's per-block scales should
+   keep dynamic range in check.
+
+Not a Spinel issue; not a ggml issue. f32 limit of the chosen format.
