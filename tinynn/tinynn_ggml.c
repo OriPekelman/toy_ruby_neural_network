@@ -2,13 +2,20 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
-#ifdef TINYNN_HAVE_CUDA
-#include "ggml-cuda.h"
-#endif
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* CUDA backend init lives in tinynn_backend_cuda.c (only present when
+ * linking against libtinynn_ggml_cuda.a). Weak DEFINITION here returns
+ * NULL — strong override in the CUDA archive provides the real impl.
+ * Lets a single tinynn_ggml.o serve both CPU-only and CUDA programs
+ * without symbol duplication, on both clang and gcc.
+ */
+__attribute__((weak)) ggml_backend_t tnn_backend_cuda_init_internal(void) {
+    return NULL;
+}
 
 #define TNN_SCRATCH_BYTES (16 * 1024 * 1024)   /* 16 MiB: 4M f32 */
 
@@ -34,12 +41,10 @@ static tnn_engine *tnn_engine_get(int prefer_cuda)
     tnn_engine *e = (tnn_engine *)calloc(1, sizeof(tnn_engine));
     if (!e) return NULL;
 
-#ifdef TINYNN_HAVE_CUDA
     if (prefer_cuda) {
-        e->backend = ggml_backend_cuda_init(0);
-        e->backend_name = "cuda";
+        e->backend = tnn_backend_cuda_init_internal();
+        if (e->backend) e->backend_name = "cuda";
     }
-#endif
     if (!e->backend) {
         e->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
         e->backend_name = "cpu";

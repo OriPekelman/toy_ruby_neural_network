@@ -513,10 +513,14 @@ tinynn/persistent_bench_big: tinynn/persistent_bench_big.rb lib/transformer.rb l
 ab-smoke-cuda: tinynn/ab_smoke_cuda
 	./tinynn/ab_smoke_cuda
 
-tinynn/tinynn_ggml_cuda.o: tinynn/tinynn_ggml.c tinynn/tinynn_ggml.h
-	$(CC) $(CFLAGS) -DTINYNN_HAVE_CUDA=1 $(GGML_INC) -I$(CUDA_DIR)/include -c $< -o $@
+tinynn/tinynn_backend_cuda.o: tinynn/tinynn_backend_cuda.c
+	$(CC) $(CFLAGS) $(GGML_INC) -I$(CUDA_DIR)/include -c $< -o $@
 
-tinynn/libtinynn_ggml_cuda.a: tinynn/tinynn_ggml_cuda.o
+# Only the CUDA backend init goes into the CUDA archive. Common
+# wrappers stay in tinynn_ggml.o (CPU archive), referenced from CUDA
+# programs via a weak link. Avoids the multi-archive multi-definition
+# linker conflict that older two-fat-archive layout had.
+tinynn/libtinynn_ggml_cuda.a: tinynn/tinynn_backend_cuda.o
 	ar $(ARFLAGS) $@ $<
 
 tinynn/ab_smoke_cuda: tinynn/ab_smoke_cuda.rb lib/transformer.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a
@@ -544,7 +548,7 @@ clean:
 	      demos/distilgpt2_demo_kv demos/distilgpt2_demo_text \
 	      demos/distilgpt2_demo_ffi_cuda demos/distilgpt2_demo_kv_cuda \
 	      tinynn/tinynn_ggml.o tinynn/libtinynn_ggml.a \
-	      tinynn/tinynn_ggml_cuda.o tinynn/libtinynn_ggml_cuda.a \
+	      tinynn/tinynn_backend_cuda.o tinynn/libtinynn_ggml_cuda.a \
 	      tinynn/smoke tinynn/ab_smoke tinynn/ab_smoke_cuda tinynn/ab_smoke_all_cuda \
 	      tinynn/ab_smoke_add tinynn/ab_smoke_gelu tinynn/ab_smoke_rms_norm \
 	      tinynn/ab_smoke_softmax tinynn/ab_smoke_transpose tinynn/ab_smoke_scale \
