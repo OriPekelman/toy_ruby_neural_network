@@ -139,6 +139,17 @@ def main():
     w.add_tensor("token_embd.weight",  take("model.embed_tokens.weight"))   # [V, D]
     w.add_tensor("output_norm.weight", take("model.norm.weight"))           # [D]
 
+    # Untied output projection (`lm_head.weight`) when present.
+    # SmolLM2 doesn't have it (tied embeddings). TinyLlama and other
+    # llama-family models that don't tie do — we transpose to [D, V]
+    # to match our [in, out] Mat convention, but actually we keep the
+    # HF orientation [V, D] so the Ruby side can do matmul_t against
+    # x_final the same way as the tied case (token_embed.weight is
+    # also [V, D] and we already matmul_t against it).
+    if "lm_head.weight" in blobs:
+        print(f"      lm_head.weight present (untied embeddings)")
+        w.add_tensor("output.weight", take("lm_head.weight"))               # [V, D]
+
     # Per-block
     for li in range(n_layer):
         hf  = f"model.layers.{li}"

@@ -45,6 +45,7 @@ end
 
 class SmolLM2KVFFICache
   attr_accessor :sess, :t_token_embed, :t_final_norm_gamma,
+                :t_output, :has_untied_output,
                 :kv_blocks_ffi,
                 :max_T, :d_model, :d_ff, :n_heads, :n_kv, :d_head,
                 :group_size, :n_layers, :vocab_size, :rope_base,
@@ -66,12 +67,18 @@ class SmolLM2KVFFICache
     @sess               = TinyNN.tnn_null_ptr
     @t_token_embed      = TinyNN.tnn_null_ptr
     @t_final_norm_gamma = TinyNN.tnn_null_ptr
+    @t_output           = TinyNN.tnn_null_ptr
+    @has_untied_output  = false
     @kv_blocks_ffi      = [SmolLM2KVBlockFFI.new]
   end
 
   # Declare every persistent tensor (weights + K/V buffers) and finalize.
+  # `untied` is true for TinyLlama-shape models that have a separate
+  # `output.weight` (lm_head); false for SmolLM2 / Qwen2.5 with tied
+  # embeddings. When false we skip the (vocab × d_model) t_output
+  # allocation entirely.
   def realize_for(max_T, d_model, d_ff, n_heads, n_kv, n_layers,
-                  vocab_size, rope_base, rms_eps)
+                  vocab_size, rope_base, rms_eps, untied)
     @max_T      = max_T
     @d_model    = d_model
     @d_ff       = d_ff
@@ -87,6 +94,10 @@ class SmolLM2KVFFICache
     @sess               = TinyNN.tnn_session_new(0)
     @t_token_embed      = TinyNN.tnn_input_2d_f32_persistent(@sess, vocab_size, d_model)
     @t_final_norm_gamma = TinyNN.tnn_input_1d_f32_persistent(@sess, d_model)
+    @has_untied_output  = untied
+    if untied
+      @t_output = TinyNN.tnn_input_2d_f32_persistent(@sess, vocab_size, d_model)
+    end
 
     @kv_blocks_ffi = [SmolLM2KVBlockFFI.new]
     li = 1
@@ -158,7 +169,14 @@ class SmolLM2KVFFICache
     end
 
     t_x_final  = TinyNN.tnn_rms_norm(@sess, t_x, @t_final_norm_gamma, eps)
-    t_kv_logits = TinyNN.tnn_matmul(@sess, @t_token_embed, t_x_final)  # ne=[vocab, 1]
+    # Logits: untied path matmuls against t_output (lm_head); tied
+    # path against t_token_embed. Both tensors are [vocab, d_model],
+    # so the matmul shape is identical either way.
+    if @has_untied_output
+      t_kv_logits = TinyNN.tnn_matmul(@sess, @t_output, t_x_final)
+    else
+      t_kv_logits = TinyNN.tnn_matmul(@sess, @t_token_embed, t_x_final)
+    end
     TinyNN.tnn_set_output(t_kv_logits)
     SmolLM2KVStepResult.new(t_token_id, t_pos, t_kv_logits)
   end
@@ -264,6 +282,9 @@ module SmolLM2KV
     TinyNN.upload_row_major(sess, kv_cache.t_token_embed, model.token_embed.weight)
     TinyNN.tnn_upload_from_float_array(sess, kv_cache.t_final_norm_gamma,
                                         model.final_norm.gamma, d_model)
+    if kv_cache.has_untied_output
+      TinyNN.upload_row_major(sess, kv_cache.t_output, model.output_proj)
+    end
 
     kv_zero_k = Mat.new(max_T,  d_head)
     kv_zero_v = Mat.new(d_head, max_T)

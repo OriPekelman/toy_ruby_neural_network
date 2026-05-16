@@ -67,8 +67,17 @@ module Toy
   end
 
   # SmolLM2 / generic llama-family decoder LM.
+  #
+  # Supports both tied and untied output embeddings:
+  #   - SmolLM2 / Qwen2.5 / Gemma: tied (logits = x · token_embed.T)
+  #   - TinyLlama / Llama-2/3 / Mistral: untied (logits = x · lm_head.T)
+  #
+  # Untied is opt-in via enable_untied_output! after construction.
+  # The output_proj weight is stored as [V, D] (matches token_embed
+  # layout) so the same matmul_t code path works for both.
   class SmolLM2
-    attr_accessor :cfg, :token_embed, :final_norm, :stack, :rope
+    attr_accessor :cfg, :token_embed, :final_norm, :stack, :rope,
+                  :output_proj, :has_untied_output
 
     def initialize(cfg)
       @cfg         = cfg
@@ -84,6 +93,18 @@ module Toy
         @stack.push(Toy::SmolLM2Block.new(cfg, @rope))
         li += 1
       end
+
+      # Output projection: placeholder Mat to pin Spinel's type
+      # inference. Real allocation happens in enable_untied_output!
+      # when the loader sees `output.weight` in the GGUF.
+      @output_proj       = Mat.new(1, 1)
+      @has_untied_output = false
+    end
+
+    # Called by the GGUF loader when `output.weight` is present.
+    def enable_untied_output!
+      @output_proj       = Mat.new(@cfg.vocab, @cfg.d_model)
+      @has_untied_output = true
     end
 
     # ids: Array<Int> (length T), pos_start: Int → logits [T, V]
@@ -95,7 +116,11 @@ module Toy
         li += 1
       end
       x_final = @final_norm.forward(x)                       # [T, D]
-      x_final.matmul_t(@token_embed.weight)                  # [T, V]  (tied)
+      if @has_untied_output
+        x_final.matmul_t(@output_proj)                       # [T, V]  (untied)
+      else
+        x_final.matmul_t(@token_embed.weight)                # [T, V]  (tied)
+      end
     end
 
     # Total trainable parameter count (tied embeddings counted once).

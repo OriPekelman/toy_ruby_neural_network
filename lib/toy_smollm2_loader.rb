@@ -30,6 +30,16 @@ module GGUFLoad
     read_mat(handle,   "token_embd.weight",  model.token_embed.weight, n_tensors)
     read_array(handle, "output_norm.weight", model.final_norm.gamma,   n_tensors)
 
+    # Untied output (`output.weight`) is present for TinyLlama / Llama-2
+    # but not for SmolLM2 / Qwen2.5. Detect via tensor presence; the
+    # converter omits it for tied models.
+    output_idx = find_index(handle, "output.weight", n_tensors)
+    if output_idx >= 0
+      puts "  untied output: output.weight present"
+      model.enable_untied_output!
+      read_mat(handle, "output.weight", model.output_proj, n_tensors)
+    end
+
     li = 0
     while li < cfg.n_layers
       blk    = model.stack[li]
