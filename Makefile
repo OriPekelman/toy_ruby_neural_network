@@ -57,6 +57,13 @@ tep_demo/hello: tep_demo/hello_api.rb tep_demo/_tep_lib/tep.rb
 tep_demo/api: tep_demo/inference_api.rb tep_demo/_tep_lib/tep.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tep_demo/inference_api.rb -o tep_demo/api
 
+# OpenAI-compatible API backed by SmolLM2/Qwen-family models via the
+# direct GGUF→FFI loader. Accepts pre-tokenized integer IDs (no
+# server-side tokenizer — keeps the single-binary deployment story).
+# Hard-codes the model GGUF path; copy + edit for other sizes.
+tep_demo/openai_api_smollm2: tep_demo/openai_api_smollm2.rb tep_demo/_tep_lib/tep.rb lib/toy_smollm2_ffi_kv.rb lib/toy_smollm2_loader.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) tep_demo/openai_api_smollm2.rb -o tep_demo/openai_api_smollm2
+
 # --- ggml vendor ------------------------------------------------------------
 $(GGML_DIR)/CMakeLists.txt:
 	mkdir -p vendor
