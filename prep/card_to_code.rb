@@ -10,6 +10,15 @@
 #   1. "[HF GPT-2 family]"   → Toy::GPT2 with Toy::GPT2Config
 #   2. "[Llama-family decoder]" → Toy::SmolLM2 with Toy::SmolLM2Config
 #
+# Two input paths:
+#   • Rendered card (Phuong–Hutter text). Detect family via the
+#     square-bracket tag; pull hyperparameters from the `Hyper:` line.
+#   • A Toy::Card IR object passed to `emit_from_card` directly.
+#     This skips the regex round-trip entirely — the model's
+#     `algorithm` method produces structured data and we read its
+#     `hyper(key)` accessor. Strictly stronger (no fragile parsing)
+#     when the producer is in-process.
+#
 # Limits (today):
 #   - Only round-trips cards we emit ourselves. Hand-written cards
 #     with novel structure aren't supported.
@@ -97,6 +106,35 @@ def emit_smollm2(hyper)
     # model.enable_untied_output! if the card declared a separate W_out.
     # model.forward(token_ids, p_start) -> Mat[T, V]
   RUBY
+end
+
+# Direct entry from a Toy::Card object — bypasses the rendered-text
+# round-trip and reads hyperparameters from the IR. The Card's `family`
+# field selects which emitter; its `hyper(key)` accessor reads each
+# value as a String (we coerce to Int/Float here for the emitter).
+#
+# Usage from in-process code:
+#   require_relative "../lib/toy_gpt2"
+#   model = Toy::GPT2.new(cfg)
+#   puts emit_from_card(model.algorithm)
+def emit_from_card(card)
+  family =
+    case card.family
+    when "HF GPT-2 family"      then :gpt2
+    when "Llama-family decoder" then :smollm2
+    else raise "unknown family in card: #{card.family.inspect}"
+    end
+
+  hyper = {}
+  card.hypers.each do |h|
+    v = h.value
+    hyper[h.key] = v.include?(".") || v.include?("e") || v.include?("E") ? v.to_f : v.to_i
+  end
+
+  case family
+  when :gpt2    then emit_gpt2(hyper)
+  when :smollm2 then emit_smollm2(hyper)
+  end
 end
 
 def main
