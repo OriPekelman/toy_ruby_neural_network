@@ -92,7 +92,24 @@ def main():
 
     print(f"[1/4] downloading {args.repo_id} → {args.cache}")
     cfg_path = hf_hub_download(args.repo_id, "config.json",       cache_dir=args.cache)
-    sft_path = hf_hub_download(args.repo_id, "model.safetensors", cache_dir=args.cache)
+    # Larger models (≥3B) shard weights across multiple safetensors
+    # with a model.safetensors.index.json that lists which key lives
+    # in which shard. Try single-file first, fall back to sharded.
+    try:
+        sft_path = hf_hub_download(args.repo_id, "model.safetensors",
+                                    cache_dir=args.cache)
+        shard_paths = [sft_path]
+    except Exception:
+        idx_path = hf_hub_download(args.repo_id,
+                                    "model.safetensors.index.json",
+                                    cache_dir=args.cache)
+        with open(idx_path) as f:
+            idx = json.load(f)
+        shards = sorted(set(idx["weight_map"].values()))
+        print(f"      sharded: {len(shards)} files ({', '.join(shards)})")
+        shard_paths = [hf_hub_download(args.repo_id, s,
+                                         cache_dir=args.cache)
+                        for s in shards]
 
     with open(cfg_path) as f:
         cfg = json.load(f)
@@ -115,7 +132,7 @@ def main():
     # dtype). Read raw bytes, then decode bf16 → f32 manually: bf16 is
     # literally the upper 16 bits of f32, so left-shift uint16 by 16
     # and reinterpret as f32.
-    print(f"[2/4] opening {sft_path}")
+    print(f"[2/4] opening {len(shard_paths)} shard(s)")
 
     def _bf16_to_f32(buf: bytes, shape) -> np.ndarray:
         as_u16 = np.frombuffer(buf, dtype=np.uint16)
@@ -123,9 +140,11 @@ def main():
         return as_u32.view(np.float32).reshape(shape)
 
     from safetensors import deserialize
-    with open(sft_path, "rb") as fh:
-        raw_payload = fh.read()
-    blobs = dict(deserialize(raw_payload))
+    blobs = {}
+    for sft_path in shard_paths:
+        with open(sft_path, "rb") as fh:
+            raw_payload = fh.read()
+        blobs.update(dict(deserialize(raw_payload)))
 
     def _load_f32(name: str) -> np.ndarray:
         info = blobs[name]

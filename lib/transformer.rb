@@ -1251,12 +1251,17 @@ class TransformerLM
     t_seq = token_ids.length
     i = 0
     while i < t_seq
-      tok = token_ids[i]
+      # Spinel-pin: `.to_i` forces Int when this method is dead code
+      # (qwen25_kv doesn't call it). Without a caller to constrain
+      # `token_ids`, Spinel boxes `tok_id` as RbVal and breaks the
+      # int-context use below. The explicit cast is a no-op at
+      # runtime when token_ids[i] is already Int.
+      tok_id = token_ids[i].to_i
       j = 0
       while j < @d_model
         pi = i * @d_model + j
-        target_grads.token_embed.flat[tok * @d_model + j] += dx.flat[pi]
-        target_grads.pos_embed.flat[pi]                   += dx.flat[pi]
+        target_grads.token_embed.flat[tok_id * @d_model + j] += dx.flat[pi]
+        target_grads.pos_embed.flat[pi]                      += dx.flat[pi]
         j += 1
       end
       i += 1
@@ -1427,4 +1432,18 @@ class TransformerLM
     end
     v - 1
   end
+end
+
+
+# Spinel anchor block. Pin `token_ids` as Array<Int> at module scope so
+# TransformerLM#embed_backward's `tok = token_ids[i]` types as Int (not
+# boxed RbVal). Spinel's post-6b2ae3b body-usage inference otherwise
+# emits sp_poly_mul(boxed_tok, ...) and fails to compile the resulting C.
+# The collapse is by local-variable NAME, so the anchor must literally
+# bind `token_ids` (not `_ai_ids` or anything else).
+if false
+  token_ids = [0]
+  _ai_dx    = Mat.new(1, 1)
+  _ai_lm    = TransformerLM.new(1, 1, 1, 1, 1, 1)
+  _ai_lm.embed_backward(token_ids, _ai_dx, _ai_lm)
 end

@@ -1279,4 +1279,12 @@ if false
   _ai_table  = Mat.new(1, 1)
   TinyNN.upload_int_array(_ai_sess, _ai_tensor, _ai_ids)
   TinyNN.embed_lookup(_ai_table, _ai_ids)
+  # Pin `indices` (literal name) as Array<Int> so embed_back's
+  # `indices[i]` returns Int. Spinel post-6b2ae3b body-usage inference
+  # would otherwise infer it as RbVal-boxed and emit invalid `((int)(_t))`
+  # against an aggregate. The local-name collapse means the anchor's
+  # var MUST be named `indices` — `_ai_ids` doesn't unify with it.
+  indices = [0]
+  _ai_d   = Mat.new(1, 1)
+  TinyNN.embed_back(_ai_d, indices, 1)
 end
