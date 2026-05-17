@@ -433,6 +433,11 @@ module TinyNN
   # (matz/spinel#474). Replaces the per-element tnn_scratch_set loops.
   ffi_func :tnn_upload_from_float_array, [:ptr, :ptr, :float_array, :size_t], :int
   ffi_func :tnn_upload_from_int_array,   [:ptr, :ptr, :int_array,   :size_t], :int
+  # Mirror of tnn_upload_from_float_array. Chunked f32→f64 download
+  # into a Ruby Array<Float>'s storage; works for tensors larger than
+  # the 16 MiB scratch. Used by `SmolLM2KVFFICache#read_persistent_mat`
+  # so weights loaded via the direct GGUF→FFI path stay inspectable.
+  ffi_func :tnn_download_to_f64_array,   [:ptr, :ptr, :float_array, :size_t], :int
   # Chunked transpose+upload — supersedes the per-element
   # `stage_transposed_and_upload` Ruby loop for tensors > scratch
   # (4M f32 slots). See tnn_upload_transposed_f64 in tinynn_ggml.c.
@@ -884,6 +889,21 @@ module TinyNN
       out.flat[i] = TinyNN.tnn_scratch_get(sess, i)
       i = i + 1
     end
+    out
+  end
+
+  # Chunked Mat-roundtrip for large tensors. Unlike download_row_major
+  # this bypasses the 16 MiB scratch (via tnn_download_to_f64_array's
+  # internal chunking) and so works on weight-sized tensors loaded via
+  # the direct GGUF→FFI path. Mirrors `upload_row_major`.
+  #
+  # Use this when you want a Mat copy of a persistent FFI tensor —
+  # inspection, Mat-side fine-tuning, export. For small graph
+  # intermediates (norms / per-step logits) the scratch-based
+  # download_row_major is fine and slightly faster.
+  def self.download_to_mat(sess, dl_handle, rows, cols)
+    out = Mat.new(rows, cols)
+    TinyNN.tnn_download_to_f64_array(sess, dl_handle, out.flat, rows * cols)
     out
   end
 

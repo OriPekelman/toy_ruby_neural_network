@@ -142,6 +142,27 @@ class SmolLM2KVFFICache
     end
   end
 
+  # Ruby-OO alias for `GGUFLoad.load_kv_cache_directly(self, path)`.
+  # Lets callers write `kv.load_weights(path)` — the module-level
+  # function form remains available for compatibility. Defined here so
+  # SmolLM2KVFFICache is the canonical entry point ("realize the cache,
+  # load the weights") for inference-side use.
+  def load_weights(path)
+    GGUFLoad.load_kv_cache_directly(self, path)
+  end
+
+  # Pull any persistent FFI tensor back to a Ruby Mat (chunked download,
+  # works for weight-sized tensors). Required by the design rule that
+  # the direct-loader path must keep Mat-roundtrip open — see
+  # docs/loader-api.md.
+  #
+  # `t` is any tensor handle exposed on this cache or its blocks
+  # (e.g. `kv.t_token_embed`, `kv.kv_blocks_ffi[3].t_w_o`). `rows` and
+  # `cols` are the logical shape; we trust the caller.
+  def read_persistent_mat(t, rows, cols)
+    TinyNN.download_to_mat(@sess, t, rows, cols)
+  end
+
   # Declare every persistent tensor (weights + K/V buffers) and finalize.
   # `untied` is true for TinyLlama-shape models that have a separate
   # `output.weight` (lm_head); false for SmolLM2 / Qwen2.5 with tied

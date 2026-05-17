@@ -206,6 +206,18 @@ int    tnn_upload_transposed_f64(void *sess, void *tensor,
  * is what ggml's GGML_TYPE_I32 expects) during the copy. */
 int    tnn_upload_from_int_array(void *sess, void *tensor, const long *data, size_t n);
 
+/* Inverse of tnn_upload_from_float_array. Pulls a tensor's f32 contents
+ * back to a host f64 buffer (the Ruby Mat's flat array) in scratch-sized
+ * chunks — so it works for tensors larger than the 16 MiB scratch.
+ * Enables Mat-roundtrip on weights loaded via the direct GGUF→FFI path
+ * without growing scratch for everyone.
+ *
+ * Return values:
+ *   0   ok
+ *  -1   null arg
+ *  -2   n exceeds tensor element count */
+int    tnn_download_to_f64_array(void *sess, void *tensor, double *dst, size_t n);
+
 int    tnn_tensor_ne0(void *t);
 int    tnn_tensor_ne1(void *t);
 size_t tnn_tensor_nbytes(void *t);

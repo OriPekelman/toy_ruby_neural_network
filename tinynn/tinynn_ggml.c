@@ -957,6 +957,34 @@ int tnn_upload_from_float_array(void *sess, void *tensor, const double *data, si
     return 0;
 }
 
+/* Mirror of tnn_upload_from_float_array: read a tensor's f32 contents
+ * back into a host f64 buffer in scratch-sized chunks. Enables full
+ * Mat-roundtrip on weights loaded via the direct GGUF→FFI path —
+ * required by the user-stated rule that the API mustn't paint into
+ * an inference-only corner. */
+int tnn_download_to_f64_array(void *sess, void *tensor, double *dst, size_t n)
+{
+    if (!sess || !tensor || !dst) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    struct ggml_tensor *t = (struct ggml_tensor *)tensor;
+    size_t available = ggml_nelements(t);
+    if (n > available) return -2;
+
+    const size_t chunk_floats = TNN_SCRATCH_BYTES / sizeof(float);
+    size_t off = 0;
+    while (off < n) {
+        size_t this_chunk = (n - off) < chunk_floats ? (n - off) : chunk_floats;
+        ggml_backend_tensor_get(t, s->scratch,
+                                  off * sizeof(float),
+                                  this_chunk * sizeof(float));
+        for (size_t i = 0; i < this_chunk; ++i) {
+            dst[off + i] = (double)s->scratch[i];
+        }
+        off += this_chunk;
+    }
+    return 0;
+}
+
 int tnn_upload_from_int_array(void *sess, void *tensor, const long *data, size_t n)
 {
     if (!sess || !tensor || !data) return -1;

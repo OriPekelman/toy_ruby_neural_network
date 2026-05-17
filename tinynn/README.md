@@ -352,6 +352,87 @@ Q8_0 SmolLM2-135M works through `prep/convert_smollm2_to_gguf.py
 See `docs/bench-gx10-2026-05-16.md` for current numbers (SmolLM2-135M
 KV-cache decode: 89 tok/s on GB10 CUDA, 77 tok/s on M2 Air CPU).
 
+### Direct loader + Mat-roundtrip
+
+For 7B-class models the Mat-mediated load path is unaffordable
+(12 B/parameter). `GGUFLoad.load_kv_cache_directly(kv, path)` —
+also reachable as the OO alias `kv.load_weights(path)` — streams GGUF
+weights straight into ggml persistent buffers at 4 B/parameter.
+
+The direct path does **not** lock you out of Ruby-side inspection.
+`kv.read_persistent_mat(t_handle, rows, cols)` pulls any persistent
+tensor back into a `Mat`:
+
+```ruby
+emb_mat = kv.read_persistent_mat(kv.t_token_embed, cfg.vocab, cfg.d_model)
+qhead0  = kv.read_persistent_mat(kv.kv_blocks_ffi[3].t_w_q[0],
+                                  cfg.d_model, cfg.d_model / cfg.n_heads)
+```
+
+Backed by `tnn_download_to_f64_array`, which chunks through the
+16 MiB scratch (so arbitrary tensor sizes work, not just those that
+fit). Verified bit-identical on SmolLM2-135M's 28M-float token_embed.
+
+See `docs/loader-api.md` for the full Mat-mediated vs direct comparison
+and `demos/roundtrip_probe.rb` for the verification.
+
+### FFI trace tap — debugging numerical regressions
+
+When inference for a new model produces NaNs or gibberish, a per-
+subblock numerical trace usually pins down the layer that diverges.
+`SmolLM2KVFFICache` (and the CUDA mirror) carry a zero-cost trace tap
+that taps into the live ggml graph without changing it:
+
+```ruby
+kv = SmolLM2KVFFICache.new
+kv.realize_for(...)
+kv.load_weights(gguf_path)
+kv.enable_trace!                 # off by default; one-line opt-in
+SmolLM2KV.decode_step(kv, token_id, 0)
+kv.dump_trace                    # prints min/max/|mean|/nan per tap
+```
+
+Output sample (one row per labelled sub-block point):
+
+```
+    L0.x_in                  n=  3584 min=-0.171 max=0.149 |mean|=0.024 nan=0
+    L0.rn1                   n=  3584 min=-3.24  max=2.71  |mean|=0.41  nan=0
+    L0.q_head0_rope          n=    64 min=-0.83  max=0.71  |mean|=0.18  nan=0
+    L0.attn_out              n=  3584 min=-0.91  max=0.77  |mean|=0.13  nan=0
+    L0.ffn_out               n=  3584 min=-0.62  max=0.54  |mean|=0.09  nan=0
+    ...
+```
+
+**How it works.** With `@trace_on` true, `trace_tap(name, tensor)`
+pushes `(name, tensor)` onto parallel arrays AND calls `tnn_set_output`
+so the scheduler keeps the tensor's backing buffer alive past
+`compute`. With `@trace_on` false it just returns `tensor` — a single
+boolean branch, no graph change at all. After `compute`, `dump_trace`
+walks the captured taps, downloads each into scratch, and runs the
+stats reductions (`tnn_scratch_min_f32` etc.) in C — one FFI call per
+stat per tap, no per-element crossings.
+
+The `puts` lines are formatted to align labels at 24 chars and `n` at
+6 — useful when scanning down a long output for the first layer where
+`nan > 0` or `|mean|` jumps an order of magnitude. The Qwen2.5
+scratch-overflow story in `docs/qwen25-known-issue.md` is the canonical
+walkthrough; trace tap is how we caught it.
+
+**Performance:** with tracing off the entire mechanism is unmeasurable
+in benchmarks. With tracing on the per-tap download is ~1 ms (CPU) at
+typical sub-block widths — fine for diagnostics, off in production.
+
+To add a new tap inside a graph builder, write:
+
+```ruby
+t_attn_out = build_attention(...)
+t_attn_out = trace_tap("L" + li.to_s + ".attn_out", t_attn_out)
+```
+
+The tap is value-transparent: it returns the same tensor handle it
+got, so it composes anywhere in the graph builder without changing
+the topology.
+
 ## What's next — fully-on-GPU training
 
 Inference is in good shape. The training side is the open work.
