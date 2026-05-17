@@ -111,6 +111,23 @@ just needs to expose it through Ruby.
 **(B) is orthogonal** — it benefits training (where the Mat IS the
 hot data) but isn't critical for inference once (A) lands.
 
+## Status (2026-05-17)
+
+(A) shipped in step 46. `tinynn/tinynn_gguf.c` gains five
+direct-loader primitives (`tnn_gguf_copy_*_to_persistent`) and
+`lib/toy_smollm2_loader.rb` adds `GGUFLoad.load_kv_cache_directly`.
+The Ruby Mat is never allocated for inference.
+
+Verified Qwen2.5-7B end-to-end:
+- **Peak RAM during decode**: 30 GB (matches the 4 B/w prediction
+  for 7.6B params).
+- **Decode**: 1062 ms/token on gx10 CPU.
+- **Output**: "Hello, my name is a 19-year-old male. I have been
+  having a problem with my".
+- Direct loader produces bit-identical first-token argmax to the
+  Mat-mediated path on 0.5B and 1.5B (verified by sharing prompt
+  IDs across runs and comparing `step 0 top index/val`).
+
 ## Current data point
 
 Qwen2.5-1.5B (1.54B params) at today's 12 B/w:

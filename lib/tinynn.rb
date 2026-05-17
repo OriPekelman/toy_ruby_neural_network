@@ -407,6 +407,19 @@ module TinyNN
   ffi_func :tnn_gguf_get_u32,               [:ptr, :str],     :int
   ffi_func :tnn_gguf_get_f32,               [:ptr, :str],     :double
   ffi_func :tnn_gguf_write_demo_file,       [:str],           :int
+  # Direct GGUF→FFI persistent loaders (see tinynn/tinynn_gguf.h).
+  # These skip the Ruby Float64 Mat intermediate, dropping per-weight
+  # cost from 12 B to 4 B and unblocking 7B inference. See
+  # docs/memory-design.md.
+  ffi_func :tnn_gguf_find_index,                    [:ptr, :str],           :int
+  ffi_func :tnn_gguf_copy_to_persistent,            [:ptr, :int, :ptr, :ptr], :int
+  ffi_func :tnn_gguf_copy_1d_to_persistent,         [:ptr, :int, :ptr, :ptr], :int
+  ffi_func :tnn_gguf_copy_transposed_to_persistent,
+           [:ptr, :int, :ptr, :ptr, :int, :int], :int
+  ffi_func :tnn_gguf_copy_head_slice_to_persistent,
+           [:ptr, :int, :ptr, :ptr, :int, :int, :int, :int], :int
+  ffi_func :tnn_gguf_copy_head_bias_slice_to_persistent,
+           [:ptr, :int, :ptr, :ptr, :int, :int], :int
   ffi_func :tnn_scratch_set_i32,  [:ptr, :int, :int],       :void
   ffi_func :tnn_scratch_get_i32,  [:ptr, :int],             :int
   ffi_func :tnn_realize,          [:ptr, :ptr],             :int

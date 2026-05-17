@@ -44,6 +44,65 @@ double tnn_gguf_get_f32(void *handle, const char *key);
  * downloaded model file. Returns 0 on success. */
 int    tnn_gguf_write_demo_file(const char *path);
 
+/* Direct GGUF → FFI persistent buffer loaders. Bypass the Ruby Mat /
+ * Array<Float64> intermediate so 7B-class models fit in RAM (3× win:
+ * 12 B/w → 4 B/w). The session arg is needed only when we have to
+ * stage a transpose; for direct memcpy the scratch buffer is unused.
+ *
+ * All four return 0 on success, negative on error (tensor missing,
+ * shape mismatch, dequant failure). The source tensor is dequantized
+ * to f32 on read if it isn't already; quantized GGUFs work but pay
+ * one dequant per call. */
+
+/* Single non-transposed tensor: token_embd.weight (V × D), and any
+ * full-shape weight without per-head splitting. ggml_backend_tensor_set
+ * handles large blits internally; no scratch chunking needed. */
+int tnn_gguf_copy_to_persistent(void *handle, int tensor_idx,
+                                 void *sess, void *target_tensor);
+
+/* Single 1-D tensor: output_norm.weight, attn_norm.weight, ffn_norm.weight. */
+int tnn_gguf_copy_1d_to_persistent(void *handle, int tensor_idx,
+                                    void *sess, void *target_tensor);
+
+/* Single transposed tensor: attn_output.weight, ffn_gate.weight,
+ * ffn_up.weight, ffn_down.weight. Source is (br × bc) row-major;
+ * target is the ggml ne=[br, bc] persistent tensor that expects the
+ * transposed byte order (matches stage_transposed_and_upload). Chunked
+ * by columns so it works for tensors larger than scratch.
+ *
+ * Convention reminder (same as tnn_upload_transposed_f64): the
+ * "transposition" here is just so that ggml_mul_mat(target, x) computes
+ * the mathematical (target^T · x) we want; bytes are physically
+ * reorganized once, at load time. */
+int tnn_gguf_copy_transposed_to_persistent(void *handle, int tensor_idx,
+                                            void *sess, void *target_tensor,
+                                            int br, int bc);
+
+/* Extract one head-slice from a full Q (n_heads × d_head) or K/V
+ * (n_kv × d_head) weight tensor and transpose-upload it to a single
+ * per-head persistent buffer. Source layout: row i is
+ * [head_0_col_0..d_head-1, head_1_col_0..d_head-1, ..., head_n-1_col_d_head-1]
+ * — i.e. heads are concatenated along the column axis. To get head h:
+ * src[i, h*d_head : (h+1)*d_head] for i in [0, d_model). Then
+ * transpose-write that (d_model × d_head) sub-matrix into target. */
+int tnn_gguf_copy_head_slice_to_persistent(void *handle, int tensor_idx,
+                                            void *sess, void *target_tensor,
+                                            int head_idx, int n_heads_total,
+                                            int d_model, int d_head);
+
+/* Extract one head-slice from a 1-D bias tensor of length
+ * (n_heads_total × d_head) and copy it to target_tensor (1-D length
+ * d_head). Used for attn_q.bias / attn_k.bias / attn_v.bias in
+ * Qwen2.x models. */
+int tnn_gguf_copy_head_bias_slice_to_persistent(void *handle, int tensor_idx,
+                                                  void *sess, void *target_tensor,
+                                                  int head_idx, int d_head);
+
+/* Locate a tensor by name. Returns its index in the GGUF, or -1 if not
+ * found. Equivalent to the Ruby find_index helper but with no per-name
+ * linear-scan-in-Ruby overhead. */
+int tnn_gguf_find_index(void *handle, const char *name);
+
 #ifdef __cplusplus
 }
 #endif
