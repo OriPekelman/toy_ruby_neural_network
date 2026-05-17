@@ -194,6 +194,13 @@ int    tnn_download(void *sess, void *tensor);
  * the per-element tnn_scratch_set loop for row-major uploads. */
 int    tnn_upload_from_float_array(void *sess, void *tensor, const double *data, size_t n);
 
+/* Transpose-and-upload a row-major f64 (br × bc) Mat into a ggml f32
+ * tensor. Chunked so it works for tensors larger than scratch
+ * (the per-element scratch_set + bulk-upload path silently truncated
+ * at 4M floats — Qwen's ffn_gate is 4.36M). */
+int    tnn_upload_transposed_f64(void *sess, void *tensor,
+                                 const double *src, int br, int bc);
+
 /* Bulk i64 → tensor upload, for row-index tensors (embedding lookup).
  * The :int_array spec gives us `const int64_t *`; we narrow to int32 (which
  * is what ggml's GGML_TYPE_I32 expects) during the copy. */
@@ -203,6 +210,13 @@ int    tnn_tensor_ne0(void *t);
 int    tnn_tensor_ne1(void *t);
 size_t tnn_tensor_nbytes(void *t);
 int    tnn_tensor_nelements(void *t);
+
+/* Stats over the first `n` floats of sess->scratch. Caller has just
+ * done tnn_download(sess, t). Used by FFI trace-tap diagnostics. */
+double tnn_scratch_min_f32(void *sess, int n);
+double tnn_scratch_max_f32(void *sess, int n);
+double tnn_scratch_sum_abs_f32(void *sess, int n);
+int    tnn_scratch_nan_count_f32(void *sess, int n);
 
 #ifdef __cplusplus
 }

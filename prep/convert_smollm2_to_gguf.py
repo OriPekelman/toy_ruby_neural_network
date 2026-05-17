@@ -189,6 +189,17 @@ def main():
         print(f"      lm_head.weight present (untied embeddings)")
         add("output.weight", take("lm_head.weight"))               # [V, D]
 
+    # Qwen2 / Qwen2.5 has biases on q_proj / k_proj / v_proj (o_proj
+    # has none). Detect once via block 0; the architecture is uniform
+    # so all blocks have the same shape.
+    has_qkv_bias = (
+        f"model.layers.0.self_attn.q_proj.bias" in blobs and
+        f"model.layers.0.self_attn.k_proj.bias" in blobs and
+        f"model.layers.0.self_attn.v_proj.bias" in blobs
+    )
+    if has_qkv_bias:
+        print("      Q/K/V biases present (Qwen2.x convention)")
+
     # Per-block
     for li in range(n_layer):
         hf  = f"model.layers.{li}"
@@ -207,6 +218,13 @@ def main():
         add(f"{out}.attn_k.weight",      take_T(f"{hf}.self_attn.k_proj.weight"))
         add(f"{out}.attn_v.weight",      take_T(f"{hf}.self_attn.v_proj.weight"))
         add(f"{out}.attn_output.weight", take_T(f"{hf}.self_attn.o_proj.weight"))
+
+        # Qwen2.x: Q/K/V biases — 1-D, no transpose. The loader keeps
+        # the f32 storage (biases are tiny next to the weights).
+        if has_qkv_bias:
+            add(f"{out}.attn_q.bias", take(f"{hf}.self_attn.q_proj.bias"))
+            add(f"{out}.attn_k.bias", take(f"{hf}.self_attn.k_proj.bias"))
+            add(f"{out}.attn_v.bias", take(f"{hf}.self_attn.v_proj.bias"))
 
         # SwiGLU FFN (all transposed)
         #   gate_proj / up_proj: HF [d_ff, D]  →  ours [D, d_ff]

@@ -4,6 +4,7 @@
 #include "ggml-cpu.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -98,7 +99,8 @@ typedef struct {
     int                     realized;
     int                     realized_b;
     int                     weights_finalized;
-    int                     last_graph;   /* 0 = none, 1 = a, 2 = b */
+    int                     last_graph;            /* 0 = none, 1 = a, 2 = b */
+    int                     scratch_overflow_warned; /* once-per-session diag */
 } tnn_session;
 
 void *tnn_session_new(int prefer_cuda)
@@ -787,12 +789,31 @@ int tnn_compute_b(void *sess)
     return (rc == GGML_STATUS_SUCCESS) ? 0 : (int)rc;
 }
 
+/* Out-of-range scratch_set used to silently drop writes — a stage+upload
+ * pair operating on a tensor larger than the scratch buffer would
+ * truncate at the boundary and then `tnn_upload` would memcpy past
+ * the scratch end into the next backend buffer. That bug bit
+ * Qwen2.5-0.5B (ffn_gate = 4.36M floats > 4M scratch slots; 17.4 MB
+ * upload past a 16 MiB scratch) and produced NaN logits at L=1 with
+ * no visible error. Now we fprintf a one-line warning the FIRST time
+ * we see an out-of-range write per session — noisy enough to catch
+ * future regressions without spamming the logs. */
 void tnn_scratch_set(void *sess, int idx, double v)
 {
     if (!sess) return;
     tnn_session *s = (tnn_session *)sess;
     int max_n = TNN_SCRATCH_BYTES / (int)sizeof(float);
-    if (idx < 0 || idx >= max_n) return;
+    if (idx < 0 || idx >= max_n) {
+        if (!s->scratch_overflow_warned) {
+            fprintf(stderr, "[tnn] WARN: tnn_scratch_set idx=%d out of range "
+                            "(max=%d, scratch=%d bytes). Subsequent uploads "
+                            "from this scratch are corrupt — use a chunked "
+                            "uploader (e.g. tnn_upload_transposed_f64).\n",
+                            idx, max_n, TNN_SCRATCH_BYTES);
+            s->scratch_overflow_warned = 1;
+        }
+        return;
+    }
     s->scratch[idx] = (float)v;
 }
 
@@ -806,13 +827,22 @@ double tnn_scratch_get(void *sess, int idx)
 }
 
 /* The scratch buffer is just bytes; we let i32 values share it. Caller
- * must not mix i32 + f32 writes within a single tensor's upload window. */
+ * must not mix i32 + f32 writes within a single tensor's upload window.
+ * Same overflow warning as tnn_scratch_set — once-per-session fprintf. */
 void tnn_scratch_set_i32(void *sess, int idx, int value)
 {
     if (!sess) return;
     tnn_session *s = (tnn_session *)sess;
     int max_n = TNN_SCRATCH_BYTES / (int)sizeof(int32_t);
-    if (idx < 0 || idx >= max_n) return;
+    if (idx < 0 || idx >= max_n) {
+        if (!s->scratch_overflow_warned) {
+            fprintf(stderr, "[tnn] WARN: tnn_scratch_set_i32 idx=%d out of "
+                            "range (max=%d). Use a chunked uploader.\n",
+                            idx, max_n);
+            s->scratch_overflow_warned = 1;
+        }
+        return;
+    }
     ((int32_t *)s->scratch)[idx] = (int32_t)value;
 }
 
@@ -840,6 +870,65 @@ int tnn_download(void *sess, void *tensor)
     tnn_session *s = (tnn_session *)sess;
     struct ggml_tensor *t = (struct ggml_tensor *)tensor;
     ggml_backend_tensor_get(t, s->scratch, 0, ggml_nbytes(t));
+    return 0;
+}
+
+/* Transpose-and-upload a row-major f64 Mat into a ggml f32 tensor of
+ * shape ne=[br, bc] in chunked passes — so it works for tensors larger
+ * than the 16 MiB scratch buffer.
+ *
+ * Source layout: src[i*bc + j] = (i, j) of an (br × bc) row-major Mat.
+ * Destination ggml layout: T[ne0=k0, ne1=k1] at byte offset k1*br + k0
+ * (in float positions). We want T[i, j] = src[i, j] (transpose semantics
+ * is in the *consumer* — ggml_mul_mat treats (br, bc) as (K, M) where
+ * the K axis is contracted; we get B^T · h that way).
+ *
+ * Chunking: pick `cols_per_chunk` ≤ scratch_slots / br. For each chunk
+ * [j_start, j_end) of columns: stage src[i, j] → scratch[(j - j_start)*br + i]
+ * for i ∈ [0, br) and j ∈ [j_start, j_end). Then upload that contiguous
+ * slice into the tensor at byte offset j_start*br*sizeof(float).
+ *
+ * Same shape as tnn_upload_from_float_array's chunking, but for the
+ * transposed-input case used by stage_transposed_and_upload. Fixes the
+ * scratch-overflow bug that produced garbage uploads for Qwen's
+ * ffn_gate / ffn_up / ffn_down (each ~17 MB, scratch is 16 MB). */
+int tnn_upload_transposed_f64(void *sess, void *tensor,
+                              const double *src, int br, int bc)
+{
+    if (!sess || !tensor || !src || br <= 0 || bc <= 0) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    struct ggml_tensor *t = (struct ggml_tensor *)tensor;
+
+    size_t expected_bytes = (size_t)br * (size_t)bc * sizeof(float);
+    if (expected_bytes > ggml_nbytes(t)) return -2;
+
+    const int max_slots = TNN_SCRATCH_BYTES / (int)sizeof(float);
+    int cols_per_chunk = max_slots / br;
+    if (cols_per_chunk <= 0) return -3;   /* br > scratch — wider than ~4M */
+
+    int j_start = 0;
+    while (j_start < bc) {
+        int j_end = j_start + cols_per_chunk;
+        if (j_end > bc) j_end = bc;
+
+        int j = j_start;
+        while (j < j_end) {
+            int i = 0;
+            const double *src_row_base = src + (size_t)j;
+            float *dst_col = s->scratch + (size_t)(j - j_start) * (size_t)br;
+            while (i < br) {
+                dst_col[i] = (float)src_row_base[(size_t)i * (size_t)bc];
+                i++;
+            }
+            j++;
+        }
+
+        size_t byte_off = (size_t)j_start * (size_t)br * sizeof(float);
+        size_t byte_len = (size_t)(j_end - j_start) * (size_t)br * sizeof(float);
+        ggml_backend_tensor_set(t, s->scratch, byte_off, byte_len);
+
+        j_start = j_end;
+    }
     return 0;
 }
 
@@ -884,6 +973,63 @@ int tnn_upload_from_int_array(void *sess, void *tensor, const long *data, size_t
 
     ggml_backend_tensor_set(t, dst, 0, n * sizeof(int32_t));
     return 0;
+}
+
+/* Scratch-buffer stats. Caller has just done tnn_download(sess, t)
+ * which copied a tensor's f32 contents into the session's scratch
+ * buffer. These helpers reduce over the first `n` floats without
+ * crossing the FFI boundary per element — one Ruby↔C call per stat,
+ * O(n) in C. Used by the trace-tap diagnostic path; not on any
+ * production hot path. */
+double tnn_scratch_min_f32(void *sess, int n)
+{
+    if (!sess || n <= 0) return 0.0;
+    tnn_session *s = (tnn_session *)sess;
+    float mn = s->scratch[0];
+    int i = 1;
+    while (i < n) { if (s->scratch[i] < mn) mn = s->scratch[i]; i++; }
+    return (double)mn;
+}
+
+double tnn_scratch_max_f32(void *sess, int n)
+{
+    if (!sess || n <= 0) return 0.0;
+    tnn_session *s = (tnn_session *)sess;
+    float mx = s->scratch[0];
+    int i = 1;
+    while (i < n) { if (s->scratch[i] > mx) mx = s->scratch[i]; i++; }
+    return (double)mx;
+}
+
+double tnn_scratch_sum_abs_f32(void *sess, int n)
+{
+    if (!sess || n <= 0) return 0.0;
+    tnn_session *s = (tnn_session *)sess;
+    double sum = 0.0;
+    int i = 0;
+    while (i < n) {
+        float v = s->scratch[i];
+        sum += v < 0.0f ? -(double)v : (double)v;
+        i++;
+    }
+    return sum;
+}
+
+/* Count of NaN-or-inf elements. NaN comparison: v != v is true iff NaN.
+ * Inf: abs(v) > 1e30 is conservative (real f32 inf is 3.4e38). */
+int tnn_scratch_nan_count_f32(void *sess, int n)
+{
+    if (!sess || n <= 0) return 0;
+    tnn_session *s = (tnn_session *)sess;
+    int c = 0;
+    int i = 0;
+    while (i < n) {
+        float v = s->scratch[i];
+        float av = v < 0.0f ? -v : v;
+        if (v != v || av > 1.0e30f) c++;
+        i++;
+    }
+    return c;
 }
 
 int tnn_tensor_ne0(void *t) { return t ? (int)((struct ggml_tensor *)t)->ne[0] : 0; }

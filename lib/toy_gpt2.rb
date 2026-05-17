@@ -55,14 +55,17 @@ module Toy
         @attn.param_count + @ffn.param_count
     end
 
-    def algorithm_card
-      s =  "Algorithm: GPT2Block.forward(x)\n"
-      s = s + "  Input/Output: x ∈ R^{T×D}\n"
-      s = s + "  1: x ← x + Attn (LN(x; γ_1, β_1, ε))             ▷ residual after attention\n"
-      s = s + "  2: x ← x + FFN  (LN(x; γ_2, β_2, ε))             ▷ residual after FFN\n"
-      s = s + "  3: return x"
-      s
+    def algorithm
+      c = Toy::Card.new("GPT2Block.forward(x)", "")
+      c.add_input("x",  "R^{T×D}", "")
+      c.add_output("x", "R^{T×D}", "")
+      c.step_update("x", "x + Attn(LN(x; γ_1, β_1, ε))", "", "residual after attention")
+      c.step_update("x", "x + FFN (LN(x; γ_2, β_2, ε))", "", "residual after FFN")
+      c.step_return("x")
+      c
     end
+
+    def algorithm_card; algorithm.render_pseudocode; end
   end
 
   # GPT-2: decoder-only transformer LM. `stack` (not `blocks`) is kept
@@ -145,28 +148,41 @@ module Toy
     # See arXiv:2207.09238 for the formalism. Mamba (arXiv:2312.00752)
     # and FlashAttention (arXiv:2205.14135) Algorithm 1 are the modern
     # exemplars for shape-annotated pseudocode.
-    def algorithm_card
-      s =  "Algorithm: Toy::GPT2.forward(x, p_start)             [HF GPT-2 family]\n"
-      s = s + "  Input:    x ∈ {1..V}^T   (token IDs)\n"
-      s = s + "            p_start ∈ ℕ    (absolute position of x[0])\n"
-      s = s + "  Output:   P ∈ R^{T×V}    (logits)\n"
-      s = s + "  Hyper:    V=" + @cfg.vocab.to_s + " D=" + @cfg.d_model.to_s +
-              " H=" + @cfg.n_heads.to_s + " D_f=" + @cfg.d_ff.to_s +
-              " N=" + @cfg.n_layers.to_s + " ctx=" + @cfg.ctx.to_s + "\n"
-      s = s + "  Param:    W_e ∈ R^{V×D}, W_p ∈ R^{ctx×D}\n"
-      s = s + "            θ_block_ℓ for ℓ=1..N\n"
-      s = s + "            γ_f, β_f ∈ R^D\n"
-      s = s + "            (total " + Toy.fmt_count(param_count) + ", embeddings tied: logits = e · W_e^⊤)\n"
-      s = s + "  1: e ← W_e[x] + W_p[p_start : p_start+T]                              e ∈ R^{T×D}\n"
-      s = s + "  2: for ℓ ← 1, …, N do\n"
-      s = s + "  3:    e ← e + Attn(LN(e; γ_ℓ^1, β_ℓ^1, ε); θ_ℓ^attn)                    e ∈ R^{T×D}\n"
-      s = s + "  4:    e ← e + FFN (LN(e; γ_ℓ^2, β_ℓ^2, ε); θ_ℓ^ffn )                    e ∈ R^{T×D}\n"
-      s = s + "  5: end for\n"
-      s = s + "  6: e ← LN(e; γ_f, β_f, ε)                                              e ∈ R^{T×D}\n"
-      s = s + "  7: P ← e · W_e^⊤                                                       P ∈ R^{T×V}\n"
-      s = s + "  8: return P"
-      s
+    #
+    # `algorithm` returns the structured form (Toy::Card); `algorithm_card`
+    # renders it to the human-readable Phuong–Hutter text. The structured
+    # form is what prep/card_to_code.rb consumes for round-trip parsing.
+    def algorithm
+      c = Toy::Card.new("Toy::GPT2.forward(x, p_start)", "HF GPT-2 family")
+      c.add_input("x",       "{1..V}^T", "token IDs")
+      c.add_input("p_start", "ℕ",        "absolute position of x[0]")
+      c.add_output("P",      "R^{T×V}",  "logits")
+      c.add_hyper("V",   @cfg.vocab.to_s)
+      c.add_hyper("D",   @cfg.d_model.to_s)
+      c.add_hyper("H",   @cfg.n_heads.to_s)
+      c.add_hyper("D_f", @cfg.d_ff.to_s)
+      c.add_hyper("N",   @cfg.n_layers.to_s)
+      c.add_hyper("ctx", @cfg.ctx.to_s)
+      c.add_param("W_e",         "R^{V×D}",   "token embeddings")
+      c.add_param("W_p",         "R^{ctx×D}", "learned absolute positions")
+      c.add_param("θ_block_ℓ",   "(ℓ=1..N)",  "per-block; see GPT2Block")
+      c.add_param("γ_f, β_f",    "R^D",       "final LayerNorm")
+      c.add_param_extra("(total " + Toy.fmt_count(param_count) +
+                        ", embeddings tied: logits = e · W_e^⊤)")
+      c.step_bind("e", "W_e[x] + W_p[p_start : p_start+T]", "e ∈ R^{T×D}")
+      c.step_loop("ℓ ← 1, …, N", "")
+      c.step_update("e", "e + Attn(LN(e; γ_ℓ^1, β_ℓ^1, ε); θ_ℓ^attn)",
+                    "e ∈ R^{T×D}", "")
+      c.step_update("e", "e + FFN (LN(e; γ_ℓ^2, β_ℓ^2, ε); θ_ℓ^ffn )",
+                    "e ∈ R^{T×D}", "")
+      c.step_loop_close
+      c.step_update("e", "LN(e; γ_f, β_f, ε)", "e ∈ R^{T×D}", "")
+      c.step_bind("P", "e · W_e^⊤",            "P ∈ R^{T×V}")
+      c.step_return("P")
+      c
     end
+
+    def algorithm_card; algorithm.render_pseudocode; end
 
     # Recursive card — model + block + sub-ops inlined.
     def algorithm_card_full

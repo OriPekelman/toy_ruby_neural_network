@@ -102,13 +102,19 @@ M2 Air with 8 GB this is feasible but tight; gx10 is comfortable.
 
 **Same as SmolLM2**, plus:
 - Q/K/V projections have **biases** (rare in llama family; standard
-  llama leaves them off)
+  llama leaves them off) — ✅ landed in step 43:
+  `Toy::GQAttention.has_qkv_bias` toggled by the loader; both the
+  native and FFI KV paths apply biases when present. The converter
+  (`prep/convert_smollm2_to_gguf.py`) writes `attn_q.bias` /
+  `attn_k.bias` / `attn_v.bias` when the HF safetensors has them.
 - vocab is **151936** — needs Qwen's tokenizer (tiktoken-style BPE with
-  a different merges table)
-- RoPE θ = 1,000,000 (long-context-friendly)
-- ctx 32768 (would blow our current `MAX_T=1024` ctx_buf)
+  a different merges table) — still pending; v1 can host-side tokenize
+- RoPE θ = 1,000,000 (long-context-friendly) — already handled
+- ctx 32768 (would blow our current `MAX_T=1024` ctx_buf) — pick a
+  smaller `MAX_T` per-demo
 
-**Estimated effort**: ~3-4 days. SmolLM2 + QKV bias plumbing + tokenizer port.
+**Remaining effort**: tokenizer only (the model itself runs today via
+`prep/convert_smollm2_to_gguf.py --repo-id Qwen/Qwen2.5-0.5B`).
 
 ### Why not Phi-3-mini-4k
 

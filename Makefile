@@ -121,13 +121,13 @@ ab-smoke-gelu: tinynn/ab_smoke_gelu
 ab-smoke-silu: tinynn/ab_smoke_silu
 	./tinynn/ab_smoke_silu
 
-tinynn/ab_smoke_silu: tinynn/ab_smoke_silu.rb lib/toy.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+tinynn/ab_smoke_silu: tinynn/ab_smoke_silu.rb lib/toy_card.rb lib/toy.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 ab-smoke-mul: tinynn/ab_smoke_mul
 	./tinynn/ab_smoke_mul
 
-tinynn/ab_smoke_mul: tinynn/ab_smoke_mul.rb lib/toy.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+tinynn/ab_smoke_mul: tinynn/ab_smoke_mul.rb lib/toy_card.rb lib/toy.rb lib/transformer.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 ab-smoke-rms-norm: tinynn/ab_smoke_rms_norm
@@ -333,44 +333,48 @@ tinynn/gpt2_load_smoke: tinynn/gpt2_load_smoke.rb lib/transformer.rb lib/gpt2.rb
 # Native Mat GPT-2 inference (DistilGPT2 / GPT-2 family).
 #
 gpt2:        demos/gpt2
-demos/gpt2: demos/gpt2.rb lib/toy.rb lib/toy_gpt2.rb lib/toy_gpt2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+demos/gpt2: demos/gpt2.rb lib/toy_card.rb lib/toy.rb lib/toy_gpt2.rb lib/toy_gpt2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 # SmolLM2-135M (llama-family) inference via Toy::SmolLM2.
 # Tokenization is host-side: ./prep/smollm2_tokens.py encode "..."
 smollm2:        demos/smollm2
-demos/smollm2: demos/smollm2.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+demos/smollm2: demos/smollm2.rb lib/toy_card.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 # SmolLM2-135M FFI KV-cache (CPU).
 smollm2_kv:        demos/smollm2_kv
-demos/smollm2_kv: demos/smollm2_kv.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+demos/smollm2_kv: demos/smollm2_kv.rb lib/toy_card.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+	$(SPINEL) $< -o $@
+
+qwen25_kv:        demos/qwen25_kv
+demos/qwen25_kv: demos/qwen25_kv.rb lib/toy_card.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 # SmolLM2-135M FFI KV-cache (CUDA).
 smollm2_kv_cuda:        demos/smollm2_kv_cuda
-demos/smollm2_kv_cuda: demos/smollm2_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
+demos/smollm2_kv_cuda: demos/smollm2_kv_cuda.rb lib/toy_card.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
 	$(SPINEL) $< -o $@
 
 # TinyLlama-1.1B demo. Uses the same Toy::SmolLM2 / FFI KV CUDA stack
 # (llama-family architecture); just configured for the larger shape.
 tinyllama_kv_cuda:        demos/tinyllama_kv_cuda
-demos/tinyllama_kv_cuda: demos/tinyllama_kv_cuda.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
+demos/tinyllama_kv_cuda: demos/tinyllama_kv_cuda.rb lib/toy_card.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv_cuda.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn_cuda.rb tinynn/libtinynn_ggml.a tinynn/libtinynn_ggml_cuda.a
 	$(SPINEL) $< -o $@
 
 tinyllama:        demos/tinyllama
-demos/tinyllama: demos/tinyllama.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+demos/tinyllama: demos/tinyllama.rb lib/toy_card.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 tinyllama_kv:        demos/tinyllama_kv
-demos/tinyllama_kv: demos/tinyllama_kv.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+demos/tinyllama_kv: demos/tinyllama_kv.rb lib/toy_card.rb lib/toy.rb lib/toy_smollm2.rb lib/toy_smollm2_loader.rb lib/toy_smollm2_ffi_kv.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/training.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 # Print the Phuong–Hutter algorithm cards for both models. No
 # inference — just emit the structured pseudocode. Source-of-truth
 # for the round-trip work (task #33).
 algorithm_cards:        demos/algorithm_cards
-demos/algorithm_cards: demos/algorithm_cards.rb lib/toy.rb lib/toy_gpt2.rb lib/toy_smollm2.rb lib/toy_gpt2_loader.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
+demos/algorithm_cards: demos/algorithm_cards.rb lib/toy_card.rb lib/toy.rb lib/toy_gpt2.rb lib/toy_smollm2.rb lib/toy_gpt2_loader.rb lib/toy_smollm2_loader.rb lib/transformer.rb lib/gpt2.rb lib/gguf_load.rb lib/tinynn.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) $< -o $@
 
 # TinyStories from-scratch training via Toy::Trainer.

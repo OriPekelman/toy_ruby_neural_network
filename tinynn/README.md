@@ -323,28 +323,58 @@ no per-element FFI calls.
   parity but not training (project's native RMSNorm backward is the
   fallback).
 
+## Inference path (Toy::GPT2 / Toy::SmolLM2)
+
+The above is the training-side bridge. Inference uses the same
+persistent-session API but at a higher abstraction: a full transformer
+forward as one persistent ggml graph, weights pinned in `ctx_w`, per
+step only `token_ids` cross FFI.
+
+| Class | File | Backend | Models proven |
+|---|---|---|---|
+| `Toy::GPT2KVFFI`             | `lib/gpt2_ffi_kv.rb`         | CPU  | DistilGPT2, GPT-2-small/medium |
+| `Toy::GPT2KVFFICuda`         | `lib/gpt2_ffi_kv_cuda.rb`    | CUDA | DistilGPT2, GPT-2-small |
+| `Toy::SmolLM2KVFFICache`     | `lib/toy_smollm2_ffi_kv.rb`     | CPU  | SmolLM2-135M, -360M (f32 + Q8_0) |
+| `Toy::SmolLM2KVFFICacheCuda` | `lib/toy_smollm2_ffi_kv_cuda.rb`| CUDA | SmolLM2-135M, -360M (f32) |
+
+KV decode primitives added for the Llama-family path: `tnn_silu`,
+`tnn_mul`, `tnn_rope_ext`, `tnn_input_1d_i32_ctx`. SwiGLU lands as
+`silu(gate(x)) ⊙ up(x) · W_down` chained in one graph; GQA reuses
+each KV head across `group_size` query heads via per-Q-head matmul
+against shared K/V buffers.
+
+GGUF quantization: f32 verified end-to-end (DistilGPT2, SmolLM2-135M).
+Q8_0 SmolLM2-135M works through `prep/convert_smollm2_to_gguf.py
+--quantize q8_0` and ggml's `to_float` type traits — ~4× smaller file,
+~1% logit noise. Q4_0 / Q5_0 wired but lightly exercised. K-quants
+(Q4_K_M etc.) need ggml's C-side quantizer; not yet wrapped.
+
+See `docs/bench-gx10-2026-05-16.md` for current numbers (SmolLM2-135M
+KV-cache decode: 89 tok/s on GB10 CUDA, 77 tok/s on M2 Air CPU).
+
 ## What's next — fully-on-GPU training
 
-The chained-graph refactor (item 1) keeps activations on GPU within
-the FFN; the optimizer wrapper (item 2 step 1) gives us on-device
-AdamW. Remaining work to move CUDA from "30× slower at toy shape"
+Inference is in good shape. The training side is the open work.
+Remaining items to move CUDA from "30× slower at toy training shape"
 to "wins at all scales":
 
-1. ~~**GeLU as a ggml graph node**~~ — ✅ done. `FFNFFICache` now
-   runs `mul_mat → gelu → mul_mat` as one chained graph.
-   `ab-smoke-ffncache` proves parity; CUDA train_minimal dropped
-   from 757 ms to 604 ms.
+1. ~~**GeLU as a ggml graph node**~~ — ✅ done.
 2. **Weights pinned on GPU**; on-device optimizer step. Step 1
-   landed: `tnn_opt_step_adamw` wraps ggml's built-in AdamW op
-   and matches the project's plain-Adam at f32 precision on both
+   landed: `tnn_opt_step_adamw` wraps ggml's built-in AdamW op and
+   matches the project's plain-Adam at f32 precision on both
    backends (`ab-smoke-adamw-op{,-cuda}`). Step 2 (wiring it into
    `FFNFFICache` with persistent weight/grad/m/v tensors and a
-   second cgraph for the update) is the next refactor. Once
-   landed, FFN weights never re-upload and `apply_gradients_adam`
-   only ferries gradients (smaller) to GPU.
-3. **Full forward as one persistent graph** — attention, embed,
-   unembed — not just FFN. The single-step training loop becomes:
-   upload tokens (tiny) → compute → download loss (tiny).
+   second cgraph for the update) is the next refactor. Once landed,
+   FFN weights never re-upload and `apply_gradients_adam` only
+   ferries gradients (smaller) to GPU.
+3. **Backward through FFI**. Today the backward pass uses native
+   `Mat#matmul_t` / `t_matmul`. Wiring it through the persistent-
+   session pattern unblocks fully-on-GPU training; same shape as
+   the inference KV-cache work, applied to the gradient path.
+4. **Full forward+backward as one persistent graph** — attention,
+   embed, unembed too, not just FFN. The single-step training loop
+   becomes: upload tokens (tiny) → compute → download loss (tiny).
+   Step 3 is a precondition.
 
 Each collapses a class of host↔device transfers. The expected end
 state at LLM scale: persistent CUDA ≥100× faster than native.
@@ -354,11 +384,7 @@ state at LLM scale: persistent CUDA ≥100× faster than native.
 - **CUDA mirrors for `gelu_back`, `adam_step`** custom kernels —
   they currently run on the session's host scratch buffer regardless
   of backend. For real GPU speed they need ggml-op composition or
-  device-side kernels.
-- **Quantized GGUF**: f32 verified end-to-end. Q4_K / Q8_0 / F16 etc.
-  are wired through ggml's `to_float` type traits but haven't been
-  exercised with a real model file.
-- **Backward through FFI**: currently the backward pass uses native
-  `Mat#matmul_t` / `t_matmul`. Wiring it through FFI would unblock
-  fully-on-GPU training; modest extension of the persistent-session
-  pattern.
+  device-side kernels. (Inference doesn't touch them.)
+- **K-quants** (Q4_K_M, Q5_K_M, Q6_K). Legacy quantizers (Q8_0,
+  Q4_0, Q5_0) work via the gguf-py writer; K-quants need ggml's
+  C-side quantizer wrapped through FFI.

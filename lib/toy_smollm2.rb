@@ -65,14 +65,20 @@ module Toy
         @attn.param_count + @ffn.param_count
     end
 
-    def algorithm_card
-      s =  "Algorithm: SmolLM2Block.forward(x, p_start)\n"
-      s = s + "  Input/Output: x ∈ R^{T×D};  p_start ∈ ℕ\n"
-      s = s + "  1: x ← x + GQAttn(RMSNorm(x; γ_1, ε), p_start)    ▷ residual; RoPE inside attn\n"
-      s = s + "  2: x ← x + SwiGLU(RMSNorm(x; γ_2, ε))             ▷ residual\n"
-      s = s + "  3: return x"
-      s
+    def algorithm
+      c = Toy::Card.new("SmolLM2Block.forward(x, p_start)", "")
+      c.add_input("x",       "R^{T×D}", "")
+      c.add_input("p_start", "ℕ",       "")
+      c.add_output("x",      "R^{T×D}", "")
+      c.step_update("x", "x + GQAttn(RMSNorm(x; γ_1, ε), p_start)",
+                    "", "residual; RoPE inside attn")
+      c.step_update("x", "x + SwiGLU(RMSNorm(x; γ_2, ε))",
+                    "", "residual")
+      c.step_return("x")
+      c
     end
+
+    def algorithm_card; algorithm.render_pseudocode; end
   end
 
   # SmolLM2 / generic llama-family decoder LM.
@@ -177,35 +183,49 @@ module Toy
     # Phuong–Hutter style algorithm card. Reads like the paper —
     # tensor shapes annotated on the right, ←  for assignment, ▷ for
     # commentary. See arXiv:2207.09238 §4 for the canonical form.
-    def algorithm_card
-      unembed_line = @has_untied_output ?
-        "  7: P ← e · W_out^⊤                                                  P ∈ R^{T×V}  (untied)" :
-        "  7: P ← e · W_e^⊤                                                    P ∈ R^{T×V}  (tied)"
-      s =  "Algorithm: Toy::SmolLM2.forward(x, p_start)              [Llama-family decoder]\n"
-      s = s + "  Input:    x ∈ {1..V}^T   (token IDs)\n"
-      s = s + "            p_start ∈ ℕ    (absolute position of x[0]; for RoPE)\n"
-      s = s + "  Output:   P ∈ R^{T×V}    (logits)\n"
-      s = s + "  Hyper:    V=" + @cfg.vocab.to_s + " D=" + @cfg.d_model.to_s +
-              " H=" + @cfg.n_heads.to_s + " H_kv=" + @cfg.n_kv.to_s +
-              " D_f=" + @cfg.d_ff.to_s + " N=" + @cfg.n_layers.to_s +
-              " ctx=" + @cfg.ctx.to_s + " θ_base=" + @cfg.rope_base.to_s + "\n"
-      s = s + "  Param:    W_e ∈ R^{V×D}                              (token embeddings)\n"
+    #
+    # `algorithm` returns the structured form (Toy::Card); `algorithm_card`
+    # renders it to the human-readable Phuong–Hutter text. The structured
+    # form is what prep/card_to_code.rb consumes for round-trip parsing.
+    def algorithm
+      c = Toy::Card.new("Toy::SmolLM2.forward(x, p_start)",
+                        "Llama-family decoder")
+      c.add_input("x",       "{1..V}^T", "token IDs")
+      c.add_input("p_start", "ℕ",        "absolute position of x[0]; for RoPE")
+      c.add_output("P",      "R^{T×V}",  "logits")
+      c.add_hyper("V",      @cfg.vocab.to_s)
+      c.add_hyper("D",      @cfg.d_model.to_s)
+      c.add_hyper("H",      @cfg.n_heads.to_s)
+      c.add_hyper("H_kv",   @cfg.n_kv.to_s)
+      c.add_hyper("D_f",    @cfg.d_ff.to_s)
+      c.add_hyper("N",      @cfg.n_layers.to_s)
+      c.add_hyper("ctx",    @cfg.ctx.to_s)
+      c.add_hyper("θ_base", @cfg.rope_base.to_s)
+      c.add_param("W_e", "R^{V×D}", "token embeddings")
       if @has_untied_output
-        s = s + "            W_out ∈ R^{V×D}                            (separate lm_head)\n"
+        c.add_param("W_out", "R^{V×D}", "separate lm_head")
       end
-      s = s + "            θ_block_ℓ for ℓ=1..N                       (per-block; see SmolLM2Block)\n"
-      s = s + "            γ_f ∈ R^D                                  (final RMSNorm)\n"
-      s = s + "            (total " + Toy.fmt_count(param_count) + ")\n"
-      s = s + "  1: e ← W_e[x]                                                        e ∈ R^{T×D}\n"
-      s = s + "  2: for ℓ ← 1, …, N do\n"
-      s = s + "  3:    e ← e + GQAttn(RMSNorm(e; γ_ℓ^1, ε), p_start; θ_ℓ^attn)         e ∈ R^{T×D}\n"
-      s = s + "  4:    e ← e + SwiGLU(RMSNorm(e; γ_ℓ^2, ε); θ_ℓ^ffn)                    e ∈ R^{T×D}\n"
-      s = s + "  5: end for\n"
-      s = s + "  6: e ← RMSNorm(e; γ_f, ε)                                              e ∈ R^{T×D}\n"
-      s = s + unembed_line + "\n"
-      s = s + "  8: return P"
-      s
+      c.add_param("θ_block_ℓ", "(ℓ=1..N)", "per-block; see SmolLM2Block")
+      c.add_param("γ_f",       "R^D",      "final RMSNorm")
+      c.add_param_extra("(total " + Toy.fmt_count(param_count) + ")")
+      c.step_bind("e", "W_e[x]", "e ∈ R^{T×D}")
+      c.step_loop("ℓ ← 1, …, N", "")
+      c.step_update("e", "e + GQAttn(RMSNorm(e; γ_ℓ^1, ε), p_start; θ_ℓ^attn)",
+                    "e ∈ R^{T×D}", "")
+      c.step_update("e", "e + SwiGLU(RMSNorm(e; γ_ℓ^2, ε); θ_ℓ^ffn)",
+                    "e ∈ R^{T×D}", "")
+      c.step_loop_close
+      c.step_update("e", "RMSNorm(e; γ_f, ε)", "e ∈ R^{T×D}", "")
+      if @has_untied_output
+        c.step_bind("P", "e · W_out^⊤", "P ∈ R^{T×V}  (untied)")
+      else
+        c.step_bind("P", "e · W_e^⊤",   "P ∈ R^{T×V}  (tied)")
+      end
+      c.step_return("P")
+      c
     end
+
+    def algorithm_card; algorithm.render_pseudocode; end
 
     # Recursive card: top-level forward + block + every sub-op
     # (RMSNorm, GQAttention, RoPE, SwiGLU) inlined. Useful for the

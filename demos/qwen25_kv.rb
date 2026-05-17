@@ -1,25 +1,31 @@
-# demos/smollm2_kv.rb — SmolLM2-135M inference via the FFI KV-cache.
+# demos/qwen25_kv.rb — Qwen2.5-0.5B inference via the FFI KV-cache.
 #
-# Mirror of demos/distilgpt2_demo_kv.rb but for the llama-family path
-# (Toy::SmolLM2 + Toy::SmolLM2KVFFI). Per-step compute is constant in
-# prompt length thanks to the KV cache.
+# Same FFI KV path as SmolLM2 — the architectural delta is Q/K/V biases
+# (Qwen2.x convention). Toggling `qkv_bias=true` in realize_for wires
+# the bias add through.
 #
 # Tokenize first:
-#   ./prep/smollm2_tokens.py encode "Once upon a time"
+#   ./prep/qwen25_tokens.py encode "Hello, my name is"
 
 require_relative "../lib/toy"
 require_relative "../lib/toy_smollm2"
 require_relative "../lib/toy_smollm2_loader"
 require_relative "../lib/toy_smollm2_ffi_kv"
-require_relative "../lib/training"   # parse_ids
+require_relative "../lib/training"
 
-GGUF     = "data/smollm2-135m-f32.gguf"
-IDS_PATH = "data/smollm2_prompt_ids.txt"
+GGUF     = "data/qwen25-0.5b-f32.gguf"
+IDS_PATH = "data/qwen25_prompt_ids.txt"
 MAX_T    = 256
 N_NEW    = 16
 
 # --- config from GGUF ---
 cfg = SmolLM2ConfigLoader.read(GGUF)
+# DEBUG: truncate stack to bisect the NaN-at-deep-stack issue.
+forced_layers = ENV["FORCE_N_LAYERS"]
+if forced_layers != nil
+  cfg.n_layers = forced_layers.to_i
+  puts "  [debug] forced n_layers=" + cfg.n_layers.to_s
+end
 puts "config: vocab=" + cfg.vocab.to_s +
      " d=" + cfg.d_model.to_s +
      " n_q=" + cfg.n_heads.to_s +
@@ -54,7 +60,7 @@ ids = parse_ids(raw[0])
 puts ""
 puts "prefilling " + ids.length.to_s + " prompt tokens..."
 
-# --- prefill: one decode_step per prompt token ---
+# --- prefill ---
 t0 = Time.now
 i = 0
 while i < ids.length
@@ -65,7 +71,7 @@ prefill_ms = (Time.now - t0) * 1000.0
 puts "  prefill: " + prefill_ms.to_s + " ms (" +
      (prefill_ms / ids.length.to_f).to_s + " ms/token)"
 
-# --- generation: argmax decode of N_NEW more tokens ---
+# --- generation ---
 puts "generating " + N_NEW.to_s + " tokens..."
 t0 = Time.now
 n = 0
@@ -84,6 +90,25 @@ while n < N_NEW
     end
     j = j + 1
   end
+  # First step diagnostics: how does argmax compare to the next few candidates?
+  if n == 0
+    puts "  step 0 logits: top index=" + best_i.to_s + " val=" + best_v.to_s +
+         " (logits[0]=" + logits.flat[0].to_s + ", logits[100]=" +
+         logits.flat[100].to_s + ", logits[1000]=" + logits.flat[1000].to_s + ")"
+    finite_count = 0
+    nan_count    = 0
+    k = 0
+    while k < cfg.vocab
+      v = logits.flat[k]
+      if v == v && v.abs < 1.0e30  # finite-ish, not NaN
+        finite_count = finite_count + 1
+      else
+        nan_count = nan_count + 1
+      end
+      k = k + 1
+    end
+    puts "  finite=" + finite_count.to_s + " nan_or_inf=" + nan_count.to_s
+  end
   ids.push(best_i)
   n = n + 1
 end
@@ -91,7 +116,6 @@ gen_ms = (Time.now - t0) * 1000.0
 puts "  generation total: " + gen_ms.to_s + " ms  (" +
      (gen_ms / N_NEW.to_f).to_s + " ms/token)"
 
-# --- write back ---
 File.open(IDS_PATH, "w") do |out|
   n = ids.length
   k = 0

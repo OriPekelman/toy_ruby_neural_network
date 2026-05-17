@@ -132,6 +132,7 @@ module TinyNNCuda
   ffi_func :tnn_upload,           [:ptr, :ptr],             :int
   ffi_func :tnn_download,         [:ptr, :ptr],             :int
   ffi_func :tnn_upload_from_float_array, [:ptr, :ptr, :float_array, :size_t], :int
+  ffi_func :tnn_upload_transposed_f64,   [:ptr, :ptr, :float_array, :int, :int], :int
   ffi_func :tnn_upload_from_int_array,   [:ptr, :ptr, :int_array,   :size_t], :int
   # CPU-scratch-backed custom kernels (gelu_back, adam_step). They
   # operate on host memory regardless of the session's backend; what
@@ -643,18 +644,11 @@ module TinyNNCuda
   end
 
   def self.upload_transposed(sess, tensor, mat)
-    br = mat.nrows
-    bc = mat.ncols
-    i = 0
-    while i < br
-      j = 0
-      while j < bc
-        TinyNNCuda.tnn_scratch_set(sess, j * br + i, mat.flat[i * bc + j])
-        j = j + 1
-      end
-      i = i + 1
-    end
-    TinyNNCuda.tnn_upload(sess, tensor)
+    # Chunked in C — works for tensors larger than the 16 MiB scratch
+    # buffer (Qwen2.5-0.5B's ffn_* are 17 MB; the per-element path
+    # silently truncated at the 4M float boundary).
+    TinyNNCuda.tnn_upload_transposed_f64(sess, tensor, mat.flat,
+                                          mat.nrows, mat.ncols)
   end
 
   # Alias to match the CPU module's name; used by feed_forward_ffi.

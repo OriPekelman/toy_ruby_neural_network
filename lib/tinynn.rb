@@ -420,8 +420,20 @@ module TinyNN
   # (matz/spinel#474). Replaces the per-element tnn_scratch_set loops.
   ffi_func :tnn_upload_from_float_array, [:ptr, :ptr, :float_array, :size_t], :int
   ffi_func :tnn_upload_from_int_array,   [:ptr, :ptr, :int_array,   :size_t], :int
+  # Chunked transpose+upload — supersedes the per-element
+  # `stage_transposed_and_upload` Ruby loop for tensors > scratch
+  # (4M f32 slots). See tnn_upload_transposed_f64 in tinynn_ggml.c.
+  ffi_func :tnn_upload_transposed_f64,   [:ptr, :ptr, :float_array, :int, :int], :int
   ffi_func :tnn_tensor_ne0,       [:ptr],                   :int
   ffi_func :tnn_tensor_ne1,       [:ptr],                   :int
+  ffi_func :tnn_tensor_nelements, [:ptr],                   :int
+
+  # Scratch stats — fast O(n) reductions in C over the bytes just
+  # placed in sess->scratch by tnn_download. Used by trace-tap.
+  ffi_func :tnn_scratch_min_f32,        [:ptr, :int], :double
+  ffi_func :tnn_scratch_max_f32,        [:ptr, :int], :double
+  ffi_func :tnn_scratch_sum_abs_f32,    [:ptr, :int], :double
+  ffi_func :tnn_scratch_nan_count_f32,  [:ptr, :int], :int
 
   # a ** b where both are project Mats (row-major f64). Returns a Mat
   # (rows = a.nrows, cols = b.ncols).
@@ -880,19 +892,14 @@ module TinyNN
   end
 
   # Internal: stage b TRANSPOSED into scratch, then bulk-upload to `target`.
+  # The C side does both the transpose and a chunked upload so the call
+  # works for tensors larger than the 16 MiB scratch buffer
+  # (Qwen2.5-0.5B's ffn_gate is 17.4 MB; the old per-element + single
+  # bulk-upload path silently truncated at the 4M-float boundary,
+  # leaving the tail uninitialised and producing 1e+37 magnitudes
+  # in the subsequent matmul output).
   def self.stage_transposed_and_upload(sess, target, b)
-    br = b.nrows
-    bc = b.ncols
-    i = 0
-    while i < br
-      j = 0
-      while j < bc
-        TinyNN.tnn_scratch_set(sess, j * br + i, b.flat[i * bc + j])
-        j = j + 1
-      end
-      i = i + 1
-    end
-    TinyNN.tnn_upload(sess, target)
+    TinyNN.tnn_upload_transposed_f64(sess, target, b.flat, b.nrows, b.ncols)
   end
 
   # Internal: stage `m` row-major into scratch, then bulk-upload to `target`.

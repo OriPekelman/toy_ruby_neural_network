@@ -25,6 +25,7 @@ require_relative "tinynn_cuda"
 class SmolLM2KVBlockFFICuda
   attr_accessor :t_rn1_gamma, :t_rn2_gamma,
                 :t_w_q, :t_w_k, :t_w_v, :t_w_o,
+                :t_b_q, :t_b_k, :t_b_v,
                 :t_w_gate, :t_w_up, :t_w_down,
                 :t_K, :t_V
 
@@ -34,6 +35,9 @@ class SmolLM2KVBlockFFICuda
     @t_w_q  = [TinyNNCuda.tnn_null_ptr]
     @t_w_k  = [TinyNNCuda.tnn_null_ptr]
     @t_w_v  = [TinyNNCuda.tnn_null_ptr]
+    @t_b_q  = [TinyNNCuda.tnn_null_ptr]
+    @t_b_k  = [TinyNNCuda.tnn_null_ptr]
+    @t_b_v  = [TinyNNCuda.tnn_null_ptr]
     @t_K    = [TinyNNCuda.tnn_null_ptr]
     @t_V    = [TinyNNCuda.tnn_null_ptr]
     @t_w_o    = TinyNNCuda.tnn_null_ptr
@@ -45,7 +49,7 @@ end
 
 class SmolLM2KVFFICacheCuda
   attr_accessor :sess, :t_token_embed, :t_final_norm_gamma,
-                :t_output, :has_untied_output,
+                :t_output, :has_untied_output, :has_qkv_bias,
                 :kv_blocks_ffi,
                 :max_T, :d_model, :d_ff, :n_heads, :n_kv, :d_head,
                 :group_size, :n_layers, :vocab_size, :rope_base,
@@ -69,16 +73,15 @@ class SmolLM2KVFFICacheCuda
     @t_final_norm_gamma = TinyNNCuda.tnn_null_ptr
     @t_output           = TinyNNCuda.tnn_null_ptr
     @has_untied_output  = false
+    @has_qkv_bias       = false
     @kv_blocks_ffi      = [SmolLM2KVBlockFFICuda.new]
   end
 
   # Declare every persistent tensor (weights + K/V buffers) and finalize.
-  # `untied` is true for TinyLlama-shape models that have a separate
-  # `output.weight` (lm_head); false for SmolLM2 / Qwen2.5 with tied
-  # embeddings. When false we skip the (vocab × d_model) t_output
-  # allocation entirely.
+  # `untied`: separate `output.weight` (TinyLlama, Llama-2).
+  # `qkv_bias`: Q/K/V have learned biases (Qwen2.x).
   def realize_for(max_T, d_model, d_ff, n_heads, n_kv, n_layers,
-                  vocab_size, rope_base, rms_eps, untied)
+                  vocab_size, rope_base, rms_eps, untied, qkv_bias)
     @max_T      = max_T
     @d_model    = d_model
     @d_ff       = d_ff
@@ -95,6 +98,7 @@ class SmolLM2KVFFICacheCuda
     @t_token_embed      = TinyNNCuda.tnn_input_2d_f32_persistent(@sess, vocab_size, d_model)
     @t_final_norm_gamma = TinyNNCuda.tnn_input_1d_f32_persistent(@sess, d_model)
     @has_untied_output  = untied
+    @has_qkv_bias       = qkv_bias
     if untied
       @t_output = TinyNNCuda.tnn_input_2d_f32_persistent(@sess, vocab_size, d_model)
     end
@@ -114,9 +118,15 @@ class SmolLM2KVFFICacheCuda
 
       # Q: n_heads per-head matrices of (d_head, d_model) (transposed for ggml).
       blk.t_w_q = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model)]
+      if qkv_bias
+        blk.t_b_q = [TinyNNCuda.tnn_input_1d_f32_persistent(@sess, d_head)]
+      end
       hq = 1
       while hq < n_heads
         blk.t_w_q.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model))
+        if qkv_bias
+          blk.t_b_q.push(TinyNNCuda.tnn_input_1d_f32_persistent(@sess, d_head))
+        end
         hq = hq + 1
       end
 
@@ -125,12 +135,20 @@ class SmolLM2KVFFICacheCuda
       blk.t_w_v = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model)]
       blk.t_K   = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, max_T,  d_head)]
       blk.t_V   = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, max_T)]
+      if qkv_bias
+        blk.t_b_k = [TinyNNCuda.tnn_input_1d_f32_persistent(@sess, d_head)]
+        blk.t_b_v = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, 1)]
+      end
       hkv = 1
       while hkv < n_kv
         blk.t_w_k.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model))
         blk.t_w_v.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, d_model))
         blk.t_K.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, max_T,  d_head))
         blk.t_V.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, max_T))
+        if qkv_bias
+          blk.t_b_k.push(TinyNNCuda.tnn_input_1d_f32_persistent(@sess, d_head))
+          blk.t_b_v.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, d_head, 1))
+        end
         hkv = hkv + 1
       end
 
@@ -188,9 +206,19 @@ class SmolLM2KVFFICacheCuda
     # --- compute K, V for each KV head (n_kv times), rope K, cpy into buffers ---
     hkv = 0
     while hkv < @n_kv
-      t_k_new = TinyNNCuda.tnn_matmul(@sess, blk.t_w_k[hkv], t_h)         # ne=[d_head, 1]
-      t_k_rot = TinyNNCuda.tnn_rope_ext(@sess, t_k_new, t_pos, @d_head, @rope_base)
-      t_v_new = TinyNNCuda.tnn_matmul(@sess, t_h, blk.t_w_v[hkv])         # ne=[1, d_head]
+      t_k_raw = TinyNNCuda.tnn_matmul(@sess, blk.t_w_k[hkv], t_h)         # ne=[d_head, 1]
+      if @has_qkv_bias
+        t_k_pre = TinyNNCuda.tnn_add(@sess, t_k_raw, blk.t_b_k[hkv])
+      else
+        t_k_pre = t_k_raw
+      end
+      t_k_rot = TinyNNCuda.tnn_rope_ext(@sess, t_k_pre, t_pos, @d_head, @rope_base)
+      t_v_raw = TinyNNCuda.tnn_matmul(@sess, t_h, blk.t_w_v[hkv])         # ne=[1, d_head]
+      if @has_qkv_bias
+        t_v_new = TinyNNCuda.tnn_add(@sess, t_v_raw, blk.t_b_v[hkv])
+      else
+        t_v_new = t_v_raw
+      end
 
       t_K_slot = TinyNNCuda.tnn_view_2d(@sess, blk.t_K[hkv],
                                       @d_head, 1, bytes_d_head, pos * bytes_d_head)
@@ -241,8 +269,13 @@ class SmolLM2KVFFICacheCuda
                                   bytes_d_head, bytes_max_T)
     hkv = hq / @group_size
 
-    t_q_new = TinyNNCuda.tnn_matmul(@sess, blk.t_w_q[hq], t_h)   # ne=[d_head, 1]
-    t_q     = TinyNNCuda.tnn_rope_ext(@sess, t_q_new, t_pos, @d_head, @rope_base)
+    t_q_raw = TinyNNCuda.tnn_matmul(@sess, blk.t_w_q[hq], t_h)   # ne=[d_head, 1]
+    if @has_qkv_bias
+      t_q_pre = TinyNNCuda.tnn_add(@sess, t_q_raw, blk.t_b_q[hq])
+    else
+      t_q_pre = t_q_raw
+    end
+    t_q     = TinyNNCuda.tnn_rope_ext(@sess, t_q_pre, t_pos, @d_head, @rope_base)
 
     t_K_hist = TinyNNCuda.tnn_view_2d(@sess, blk.t_K[hkv],
                                     @d_head, pos + 1, bytes_d_head, 0)
@@ -300,6 +333,9 @@ module SmolLM2KVCuda
       hq = 0
       while hq < n_heads
         TinyNNCuda.stage_transposed_and_upload(sess, blk_f.t_w_q[hq], blk_n.attn.w_q[hq])
+        if kv_cache.has_qkv_bias
+          TinyNNCuda.tnn_upload_from_float_array(sess, blk_f.t_b_q[hq], blk_n.attn.b_q[hq], d_head)
+        end
         hq = hq + 1
       end
 
@@ -307,6 +343,10 @@ module SmolLM2KVCuda
       while hkv < n_kv
         TinyNNCuda.stage_transposed_and_upload(sess, blk_f.t_w_k[hkv], blk_n.attn.w_k[hkv])
         TinyNNCuda.stage_transposed_and_upload(sess, blk_f.t_w_v[hkv], blk_n.attn.w_v[hkv])
+        if kv_cache.has_qkv_bias
+          TinyNNCuda.tnn_upload_from_float_array(sess, blk_f.t_b_k[hkv], blk_n.attn.b_k[hkv], d_head)
+          TinyNNCuda.tnn_upload_from_float_array(sess, blk_f.t_b_v[hkv], blk_n.attn.b_v[hkv], d_head)
+        end
         TinyNNCuda.upload_row_major(sess, blk_f.t_K[hkv], kv_zero_k)
         TinyNNCuda.upload_row_major(sess, blk_f.t_V[hkv], kv_zero_v)
         hkv = hkv + 1

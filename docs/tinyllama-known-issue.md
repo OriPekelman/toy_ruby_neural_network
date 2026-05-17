@@ -1,6 +1,30 @@
-# TinyLlama-1.1B FFI path produces NaN logits (open)
+# TinyLlama-1.1B FFI path produces NaN logits (FIXED)
 
-**Status**: open. Native Mat path works; FFI (CPU and CUDA) NaNs.
+**Status**: fixed in step 45 (2026-05-17). Root cause was a silent
+scratch-buffer overflow in `stage_transposed_and_upload`, not an
+f32 precision issue. Same bug, same fix as
+[Qwen2.5-0.5B](qwen25-known-issue.md) — TinyLlama's `ffn_gate` is
+2048 × 5632 = 11.5M floats, 3× larger than the 16 MiB scratch.
+
+The diagnosis below ("f32 precision at L=5+") was wrong: the
+non-monotonic NaN-at-L=5 / zeros-at-L=6 / finite-at-L=10 pattern was
+random heap garbage in the scratch tail, not a precision threshold.
+Now produces coherent text via `demos/tinyllama_kv`:
+
+```
+Once upon a time, there was a young girl named Lily. Lily was a kind and
+```
+
+The original investigation notes are kept below as a record of how
+the misdiagnosis went. The trace tap that ultimately found it
+(`SmolLM2KVFFICache#enable_trace!`) is in `lib/toy_smollm2_ffi_kv.rb`;
+see `docs/qwen25-known-issue.md` for the trace excerpt and the fix.
+
+---
+
+## Original (incorrect) investigation
+
+**Status (at the time)**: open. Native Mat path works; FFI (CPU and CUDA) NaNs.
 
 ## Symptoms
 

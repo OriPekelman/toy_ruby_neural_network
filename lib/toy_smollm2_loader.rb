@@ -40,6 +40,15 @@ module GGUFLoad
       read_mat(handle, "output.weight", model.output_proj, n_tensors)
     end
 
+    # Q/K/V biases are a Qwen2.x trait (Llama / SmolLM2 / TinyLlama lack
+    # them). Detect via attn_q.bias in block 0; the converter writes all
+    # three when any are present in the HF safetensors.
+    qkv_bias_idx = find_index(handle, "blk.0.attn_q.bias", n_tensors)
+    has_qkv_bias = qkv_bias_idx >= 0
+    if has_qkv_bias
+      puts "  Q/K/V biases present (Qwen2.x-style)"
+    end
+
     li = 0
     while li < cfg.n_layers
       blk    = model.stack[li]
@@ -57,6 +66,18 @@ module GGUFLoad
       read_split_kv_weight(handle, prefix + ".attn_v.weight",
                             blk.attn.w_v, n_kv, d_model, d_head, n_tensors)
       read_mat(handle,   prefix + ".attn_output.weight", blk.attn.w_o, n_tensors)
+
+      if has_qkv_bias
+        # Q bias: [n_heads * d_head] split into per-Q-head arrays.
+        read_split_heads_bias(handle, prefix + ".attn_q.bias",
+                               blk.attn.b_q, n_heads, d_head, n_tensors)
+        # K/V biases: [n_kv * d_head] split into per-KV-head arrays.
+        read_split_kv_bias(handle, prefix + ".attn_k.bias",
+                            blk.attn.b_k, n_kv, d_head, n_tensors)
+        read_split_kv_bias(handle, prefix + ".attn_v.bias",
+                            blk.attn.b_v, n_kv, d_head, n_tensors)
+        blk.attn.enable_qkv_bias!
+      end
 
       read_mat(handle,   prefix + ".ffn_gate.weight", blk.ffn.w_gate, n_tensors)
       read_mat(handle,   prefix + ".ffn_up.weight",   blk.ffn.w_up,   n_tensors)

@@ -48,7 +48,7 @@ puts "realizing KV cache (MAX_T=" + MAX_T.to_s + ")..."
 kv = SmolLM2KVFFICache.new
 kv.realize_for(MAX_T, cfg.d_model, cfg.d_ff, cfg.n_heads, cfg.n_kv,
                 cfg.n_layers, cfg.vocab, cfg.rope_base, cfg.rms_eps,
-                model.has_untied_output)
+                model.has_untied_output, model.stack[0].attn.has_qkv_bias)
 t0 = Time.now
 SmolLM2KV.upload_from(kv, model)
 puts "  uploaded weights in " + ((Time.now - t0) * 1000.0).to_s + " ms"

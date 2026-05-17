@@ -20,6 +20,7 @@
 #     so Spinel's type inference flows cleanly.
 
 require_relative "transformer"   # Mat lives here
+require_relative "toy_card"      # Toy::Card structured IR
 
 module Toy
   # =========================================================================
@@ -259,26 +260,32 @@ module Toy
     end
 
     # Algorithm card. Shapes: x ∈ R^{T×D}; D_h = D/H.
-    def algorithm_card
-      s =  "Algorithm: CausalSelfAttention.forward(x)\n"
-      s = s + "  Input:  x ∈ R^{T×D}\n"
-      s = s + "  Output: y ∈ R^{T×D}\n"
-      s = s + "  Hyper:  D=" + @d_model.to_s + " H=" + @n_heads.to_s + " D_h=" + @d_head.to_s + "\n"
-      s = s + "  Param:  W_Q^h, W_K^h, W_V^h ∈ R^{D×D_h}; b_Q^h, b_K^h, b_V^h ∈ R^{D_h}\n"
-      s = s + "          W_O ∈ R^{D×D}; b_O ∈ R^{D}\n"
-      s = s + "  1: for h ← 1, …, H do                                              ▷ per head\n"
-      s = s + "  2:    q^h ← x · W_Q^h + b_Q^h                                       q^h ∈ R^{T×D_h}\n"
-      s = s + "  3:    k^h ← x · W_K^h + b_K^h                                       k^h ∈ R^{T×D_h}\n"
-      s = s + "  4:    v^h ← x · W_V^h + b_V^h                                       v^h ∈ R^{T×D_h}\n"
-      s = s + "  5:    S^h ← q^h · (k^h)^⊤ / √D_h                                    S^h ∈ R^{T×T}\n"
-      s = s + "  6:    S^h ← CausalMask(S^h)                                         (j>i ↦ −∞)\n"
-      s = s + "  7:    A^h ← softmax_rows(S^h)                                       A^h ∈ R^{T×T}\n"
-      s = s + "  8:    o^h ← A^h · v^h                                               o^h ∈ R^{T×D_h}\n"
-      s = s + "  9: end for\n"
-      s = s + " 10: y ← concat(o^1, …, o^H) · W_O + b_O                              y ∈ R^{T×D}\n"
-      s = s + " 11: return y"
-      s
+    def algorithm
+      c = Toy::Card.new("CausalSelfAttention.forward(x)", "")
+      c.add_input("x",  "R^{T×D}", "")
+      c.add_output("y", "R^{T×D}", "")
+      c.add_hyper("D",   @d_model.to_s)
+      c.add_hyper("H",   @n_heads.to_s)
+      c.add_hyper("D_h", @d_head.to_s)
+      c.add_param("W_Q^h, W_K^h, W_V^h", "R^{D×D_h}", "")
+      c.add_param("b_Q^h, b_K^h, b_V^h", "R^{D_h}",    "")
+      c.add_param("W_O",                  "R^{D×D}",   "")
+      c.add_param("b_O",                  "R^{D}",     "")
+      c.step_loop("h ← 1, …, H", "per head")
+      c.step_bind("q^h", "x · W_Q^h + b_Q^h",     "q^h ∈ R^{T×D_h}")
+      c.step_bind("k^h", "x · W_K^h + b_K^h",     "k^h ∈ R^{T×D_h}")
+      c.step_bind("v^h", "x · W_V^h + b_V^h",     "v^h ∈ R^{T×D_h}")
+      c.step_bind("S^h", "q^h · (k^h)^⊤ / √D_h", "S^h ∈ R^{T×T}")
+      c.step_update("S^h", "CausalMask(S^h)",   "",                  "j>i ↦ −∞")
+      c.step_bind("A^h", "softmax_rows(S^h)",    "A^h ∈ R^{T×T}")
+      c.step_bind("o^h", "A^h · v^h",            "o^h ∈ R^{T×D_h}")
+      c.step_loop_close
+      c.step_bind("y", "concat(o^1, …, o^H) · W_O + b_O", "y ∈ R^{T×D}")
+      c.step_return("y")
+      c
     end
+
+    def algorithm_card; algorithm.render_pseudocode; end
   end
 
   # =========================================================================
@@ -318,17 +325,24 @@ module Toy
         @d_ff * @d_model + @d_model  # W2 + b2
     end
 
-    def algorithm_card
-      s =  "Algorithm: FFN.forward(x)                                    [GPT-2-style MLP]\n"
-      s = s + "  Input:  x ∈ R^{T×D}\n"
-      s = s + "  Output: y ∈ R^{T×D}\n"
-      s = s + "  Hyper:  D=" + @d_model.to_s + " D_f=" + @d_ff.to_s + " activation=" + @act.to_s + "\n"
-      s = s + "  Param:  W_1 ∈ R^{D×D_f}, b_1 ∈ R^{D_f}; W_2 ∈ R^{D_f×D}, b_2 ∈ R^{D}\n"
-      s = s + "  1: h ← gelu(x · W_1 + b_1)                                          h ∈ R^{T×D_f}\n"
-      s = s + "  2: y ← h · W_2 + b_2                                                y ∈ R^{T×D}\n"
-      s = s + "  3: return y"
-      s
+    def algorithm
+      c = Toy::Card.new("FFN.forward(x)", "GPT-2-style MLP")
+      c.add_input("x",  "R^{T×D}", "")
+      c.add_output("y", "R^{T×D}", "")
+      c.add_hyper("D",          @d_model.to_s)
+      c.add_hyper("D_f",        @d_ff.to_s)
+      c.add_hyper("activation", @act.to_s)
+      c.add_param("W_1", "R^{D×D_f}", "")
+      c.add_param("b_1", "R^{D_f}",   "")
+      c.add_param("W_2", "R^{D_f×D}", "")
+      c.add_param("b_2", "R^{D}",     "")
+      c.step_bind("h", "gelu(x · W_1 + b_1)", "h ∈ R^{T×D_f}")
+      c.step_bind("y", "h · W_2 + b_2",       "y ∈ R^{T×D}")
+      c.step_return("y")
+      c
     end
+
+    def algorithm_card; algorithm.render_pseudocode; end
   end
 
   # =========================================================================
@@ -419,19 +433,23 @@ module Toy
       3 * @d_model * @d_ff
     end
 
-    def algorithm_card
-      s =  "Algorithm: SwiGLU.forward(x)                          [Llama-family MLP]\n"
-      s = s + "  Input:  x ∈ R^{T×D}\n"
-      s = s + "  Output: y ∈ R^{T×D}\n"
-      s = s + "  Hyper:  D=" + @d_model.to_s + " D_f=" + @d_ff.to_s + "\n"
-      s = s + "  Param:  W_gate, W_up ∈ R^{D×D_f}; W_down ∈ R^{D_f×D}    (no biases)\n"
-      s = s + "  1: g ← x · W_gate                                                   g ∈ R^{T×D_f}\n"
-      s = s + "  2: u ← x · W_up                                                     u ∈ R^{T×D_f}\n"
-      s = s + "  3: h ← silu(g) ⊙ u                                                  h ∈ R^{T×D_f}\n"
-      s = s + "  4: y ← h · W_down                                                   y ∈ R^{T×D}\n"
-      s = s + "  5: return y"
-      s
+    def algorithm
+      c = Toy::Card.new("SwiGLU.forward(x)", "Llama-family MLP")
+      c.add_input("x",  "R^{T×D}", "")
+      c.add_output("y", "R^{T×D}", "")
+      c.add_hyper("D",   @d_model.to_s)
+      c.add_hyper("D_f", @d_ff.to_s)
+      c.add_param("W_gate, W_up", "R^{D×D_f}", "")
+      c.add_param("W_down",       "R^{D_f×D}", "no biases — Llama convention")
+      c.step_bind("g", "x · W_gate",    "g ∈ R^{T×D_f}")
+      c.step_bind("u", "x · W_up",      "u ∈ R^{T×D_f}")
+      c.step_bind("h", "silu(g) ⊙ u",   "h ∈ R^{T×D_f}")
+      c.step_bind("y", "h · W_down",    "y ∈ R^{T×D}")
+      c.step_return("y")
+      c
     end
+
+    def algorithm_card; algorithm.render_pseudocode; end
   end
 
   # =========================================================================
@@ -506,18 +524,24 @@ module Toy
     end
     def param_count; 0; end   # cos/sin tables are precomputed, not learned
 
-    def algorithm_card
-      s =  "Algorithm: RoPE.rotate!(x, p_start)                          [rotate_half / NEOX form]\n"
-      s = s + "  Input:  x ∈ R^{T×D_h}                  (one head's Q or K)\n"
-      s = s + "          p_start ∈ ℕ                    (absolute position of row 0)\n"
-      s = s + "  Hyper:  D_h=" + @d_head.to_s + " θ_base (cos/sin tables precomputed)\n"
-      s = s + "  for t ← 0, …, T-1, k ← 0, …, D_h/2 - 1 do\n"
-      s = s + "      p ← p_start + t\n"
-      s = s + "      c ← cos(p · θ_base^{-2k/D_h}), s ← sin(p · θ_base^{-2k/D_h})\n"
-      s = s + "      (x[t,k], x[t,k+D_h/2]) ← (x[t,k]·c − x[t,k+D_h/2]·s, x[t,k+D_h/2]·c + x[t,k]·s)\n"
-      s = s + "  end"
-      s
+    def algorithm
+      c = Toy::Card.new("RoPE.rotate!(x, p_start)", "rotate_half / NEOX form")
+      c.add_input("x",       "R^{T×D_h}", "one head's Q or K")
+      c.add_input("p_start", "ℕ",         "absolute position of row 0")
+      c.add_hyper("D_h",    @d_head.to_s)
+      c.add_hyper("θ_base", "(cos/sin tables precomputed)")
+      c.step_loop("t ← 0, …, T-1, k ← 0, …, D_h/2 − 1", "")
+      c.step_bind("p", "p_start + t", "")
+      c.step_bind("c, s",
+                  "cos(p · θ_base^{−2k/D_h}), sin(p · θ_base^{−2k/D_h})", "")
+      c.step_update("(x[t,k], x[t,k+D_h/2])",
+                    "(x[t,k]·c − x[t,k+D_h/2]·s, x[t,k+D_h/2]·c + x[t,k]·s)",
+                    "", "")
+      c.step_loop_close
+      c
     end
+
+    def algorithm_card; algorithm.render_pseudocode; end
   end
 
   # =========================================================================
@@ -528,12 +552,20 @@ module Toy
   # Qwen2.5-0.5B (14/2). When n_heads == n_kv this degenerates to
   # standard MHA.
   #
-  # RoPE is applied to Q and K *before* the dot product. No biases on
-  # any projection — Llama-family convention. The two-arg forward
-  # `(x, pos_start)` is needed because RoPE depends on absolute position.
+  # RoPE is applied to Q and K *before* the dot product. The two-arg
+  # forward `(x, pos_start)` is needed because RoPE depends on absolute
+  # position.
+  #
+  # Q/K/V biases are pre-allocated to zeros but only applied when
+  # `has_qkv_bias` is true. SmolLM2 / Llama / TinyLlama: false (Llama
+  # convention). Qwen2 / Qwen2.5: true (Q/K/V have learned biases; O
+  # does not). The loader flips the flag when it finds attn_q.bias /
+  # attn_k.bias / attn_v.bias in the GGUF — pre-allocation keeps the
+  # ivar types stable for Spinel (no reassign-after-construct).
   # =========================================================================
   class GQAttention
     attr_accessor :w_q, :w_k, :w_v, :w_o,
+                  :b_q, :b_k, :b_v, :has_qkv_bias,
                   :n_heads, :n_kv, :d_model, :d_head,
                   :group_size, :inv_sqrt, :rope
 
@@ -547,36 +579,63 @@ module Toy
       @rope       = rope_obj
 
       @w_q = [Mat.new(d_model, @d_head)]
+      @b_q = [Array.new(@d_head, 0.0)]   # per Q head (zeros until enabled)
       hq = 1
       while hq < n_heads
         @w_q.push(Mat.new(d_model, @d_head))
+        @b_q.push(Array.new(@d_head, 0.0))
         hq += 1
       end
       @w_k = [Mat.new(d_model, @d_head)]
       @w_v = [Mat.new(d_model, @d_head)]
+      @b_k = [Array.new(@d_head, 0.0)]   # per KV head
+      @b_v = [Array.new(@d_head, 0.0)]
       hkv = 1
       while hkv < n_kv
         @w_k.push(Mat.new(d_model, @d_head))
         @w_v.push(Mat.new(d_model, @d_head))
+        @b_k.push(Array.new(@d_head, 0.0))
+        @b_v.push(Array.new(@d_head, 0.0))
         hkv += 1
       end
       @w_o = Mat.new(d_model, d_model)
+      @has_qkv_bias = false               # flipped by the loader for Qwen2.x
+    end
+
+    # Called by the GGUF loader when attn_q.bias / attn_k.bias /
+    # attn_v.bias are present. Biases are already allocated; this just
+    # flips the flag.
+    def enable_qkv_bias!
+      @has_qkv_bias = true
     end
 
     # x: [T, D] → [T, D].  pos_start: absolute position of row 0 of x.
     def forward(x, pos_start)
       # 1) project + rotate K, V once per KV head (n_kv times).
       k0 = x.matmul(@w_k[0])                 # [T, Dh]
+      if @has_qkv_bias
+        Toy.add_bias!(k0, @b_k[0])
+      end
       @rope.rotate!(k0, pos_start)
       v0 = x.matmul(@w_v[0])                 # [T, Dh]  (V is not rotated)
+      if @has_qkv_bias
+        Toy.add_bias!(v0, @b_v[0])
+      end
       ks = [k0]
       vs = [v0]
       hkv = 1
       while hkv < @n_kv
         k_h = x.matmul(@w_k[hkv])
+        if @has_qkv_bias
+          Toy.add_bias!(k_h, @b_k[hkv])
+        end
         @rope.rotate!(k_h, pos_start)
+        v_h = x.matmul(@w_v[hkv])
+        if @has_qkv_bias
+          Toy.add_bias!(v_h, @b_v[hkv])
+        end
         ks.push(k_h)
-        vs.push(x.matmul(@w_v[hkv]))
+        vs.push(v_h)
         hkv += 1
       end
 
@@ -598,6 +657,9 @@ module Toy
     # One query-head attention.  x: [T, D] → [T, Dh].
     def attend(x, hq, k_h, v_h, pos_start)
       q_h = x.matmul(@w_q[hq])                 # [T, Dh]
+      if @has_qkv_bias
+        Toy.add_bias!(q_h, @b_q[hq])
+      end
       @rope.rotate!(q_h, pos_start)
       scores = q_h.matmul_t(k_h)               # [T, T]
       scores.scale!(@inv_sqrt)
@@ -613,35 +675,61 @@ module Toy
     end
     def param_count
       # Q: n_heads × (d_model × d_head). K/V: n_kv × (d_model × d_head). O: d_model²
-      @n_heads * @d_model * @d_head +
-        2 * @n_kv * @d_model * @d_head +
-        @d_model * @d_model
+      # Plus Q/K/V biases when enabled (Qwen2.x).
+      n = @n_heads * @d_model * @d_head +
+          2 * @n_kv * @d_model * @d_head +
+          @d_model * @d_model
+      if @has_qkv_bias
+        n = n + @n_heads * @d_head + 2 * @n_kv * @d_head
+      end
+      n
     end
 
-    def algorithm_card
-      s =  "Algorithm: GQAttention.forward(x, p_start)              [grouped-query + RoPE]\n"
-      s = s + "  Input:  x ∈ R^{T×D}, p_start ∈ ℕ\n"
-      s = s + "  Output: y ∈ R^{T×D}\n"
-      s = s + "  Hyper:  D=" + @d_model.to_s + " H=" + @n_heads.to_s +
-              " H_kv=" + @n_kv.to_s + " g=H/H_kv=" + @group_size.to_s +
-              " D_h=" + @d_head.to_s + "\n"
-      s = s + "  Param:  W_Q^h ∈ R^{D×D_h} for h=1..H        (per query head)\n"
-      s = s + "          W_K^j, W_V^j ∈ R^{D×D_h} for j=1..H_kv     (per KV head; shared across g Q heads)\n"
-      s = s + "          W_O ∈ R^{D×D}                              (no biases — Llama convention)\n"
-      s = s + "  1: for j ← 1, …, H_kv do                                  ▷ KV computed once per group\n"
-      s = s + "  2:    k^j ← RoPE(x · W_K^j, p_start)                      k^j ∈ R^{T×D_h}\n"
-      s = s + "  3:    v^j ← x · W_V^j                                     v^j ∈ R^{T×D_h}  (V not rotated)\n"
-      s = s + "  4: end for\n"
-      s = s + "  5: for h ← 1, …, H do                                     ▷ per query head\n"
-      s = s + "  6:    j ← ⌊(h−1) / g⌋ + 1                                 ▷ KV group for this Q head\n"
-      s = s + "  7:    q^h ← RoPE(x · W_Q^h, p_start)                      q^h ∈ R^{T×D_h}\n"
-      s = s + "  8:    S^h ← CausalMask(q^h · (k^j)^⊤ / √D_h)              S^h ∈ R^{T×T}\n"
-      s = s + "  9:    o^h ← softmax_rows(S^h) · v^j                       o^h ∈ R^{T×D_h}\n"
-      s = s + " 10: end for\n"
-      s = s + " 11: y ← concat(o^1, …, o^H) · W_O                          y ∈ R^{T×D}\n"
-      s = s + " 12: return y"
-      s
+    def algorithm
+      c = Toy::Card.new("GQAttention.forward(x, p_start)", "grouped-query + RoPE")
+      c.add_input("x",       "R^{T×D}", "")
+      c.add_input("p_start", "ℕ",       "")
+      c.add_output("y",      "R^{T×D}", "")
+      c.add_hyper("D",       @d_model.to_s)
+      c.add_hyper("H",       @n_heads.to_s)
+      c.add_hyper("H_kv",    @n_kv.to_s)
+      c.add_hyper("g",       @group_size.to_s)
+      c.add_hyper("D_h",     @d_head.to_s)
+      c.add_param("W_Q^h",  "R^{D×D_h}", "per query head (h=1..H)")
+      c.add_param("W_K^j, W_V^j", "R^{D×D_h}",
+                  "per KV head (j=1..H_kv); shared across g Q heads")
+      if @has_qkv_bias
+        c.add_param("b_Q^h",        "R^{D_h}", "per query head")
+        c.add_param("b_K^j, b_V^j", "R^{D_h}", "per KV head — Qwen2.x convention")
+        c.add_param("W_O", "R^{D×D}", "no output bias")
+      else
+        c.add_param("W_O", "R^{D×D}", "no biases — Llama convention")
+      end
+      c.step_loop("j ← 1, …, H_kv", "KV computed once per group")
+      if @has_qkv_bias
+        c.step_bind("k^j", "RoPE(x · W_K^j + b_K^j, p_start)", "k^j ∈ R^{T×D_h}")
+        c.step_update("v^j", "x · W_V^j + b_V^j",              "v^j ∈ R^{T×D_h}", "V not rotated")
+      else
+        c.step_bind("k^j", "RoPE(x · W_K^j, p_start)",         "k^j ∈ R^{T×D_h}")
+        c.step_update("v^j", "x · W_V^j",                      "v^j ∈ R^{T×D_h}", "V not rotated")
+      end
+      c.step_loop_close
+      c.step_loop("h ← 1, …, H", "per query head")
+      c.step_bind("j",   "⌊(h−1) / g⌋ + 1", "")
+      if @has_qkv_bias
+        c.step_bind("q^h", "RoPE(x · W_Q^h + b_Q^h, p_start)", "q^h ∈ R^{T×D_h}")
+      else
+        c.step_bind("q^h", "RoPE(x · W_Q^h, p_start)",         "q^h ∈ R^{T×D_h}")
+      end
+      c.step_bind("S^h", "CausalMask(q^h · (k^j)^⊤ / √D_h)", "S^h ∈ R^{T×T}")
+      c.step_bind("o^h", "softmax_rows(S^h) · v^j",          "o^h ∈ R^{T×D_h}")
+      c.step_loop_close
+      c.step_bind("y", "concat(o^1, …, o^H) · W_O", "y ∈ R^{T×D}")
+      c.step_return("y")
+      c
     end
+
+    def algorithm_card; algorithm.render_pseudocode; end
   end
 
   # =========================================================================

@@ -159,6 +159,34 @@ module GGUFLoad
     end
   end
 
+  # GQA variant of read_split_heads_bias for K/V: the source is a
+  # 1-D bias of length n_kv * d_head, split into n_kv arrays of d_head.
+  # Used for Qwen2.x attn_k.bias / attn_v.bias.
+  def self.read_split_kv_bias(handle, name, dst, n_kv, d_head, n_tensors)
+    idx = find_index(handle, name, n_tensors)
+    if idx < 0
+      puts "missing: " + name
+      return
+    end
+    nel = n_kv * d_head
+    tmp = Array.new(nel, 0.0)
+    rc  = TinyNN.tnn_gguf_read_f32_to_doubles(handle, idx, tmp, nel)
+    if rc != 0
+      puts "read failed: " + name + " rc=" + rc.to_s
+      return
+    end
+    h = 0
+    while h < n_kv
+      arr = dst[h]
+      j = 0
+      while j < d_head
+        arr[j] = tmp[h * d_head + j]
+        j = j + 1
+      end
+      h = h + 1
+    end
+  end
+
   # GQA variant of read_split_heads_weight: the source tensor is
   # [d_model, n_kv * d_head] (not square), and we want to split it into
   # n_kv per-head matrices of shape (d_model, d_head). Mirrors the
