@@ -17,6 +17,7 @@ require_relative "transformer"
 require_relative "toy"
 require_relative "toy_smollm2"
 require_relative "tinynn"
+require_relative "toy_smollm2_loader"
 
 # Per-block persistent tensors for the SmolLM2 KV cache.
 #
@@ -313,6 +314,44 @@ class SmolLM2KVFFICache
     end
 
     @realized = true
+  end
+
+  # Auto-dispatch: open the GGUF, peek at its `toy.ggml_native` flag,
+  # and route to either the BYO-pointer mmap path (Phase 2) or the
+  # legacy realize_for + load_weights copy path. The mmap path also
+  # auto-detects the weight type (F32 vs Q8 vs ...).
+  #
+  # Returns the GGUF handle (or null pointer for the legacy path).
+  # Caller must keep the returned handle alive for the kv_cache's
+  # lifetime when it's non-null (the mmap backs the weight tensors).
+  #
+  # Usage from a tep_demo binary:
+  #
+  #   STATE.cfg   = SmolLM2ConfigLoader.read(GGUF_PATH)
+  #   STATE.flags = GGUFLoad.detect_smollm2_flags(GGUF_PATH)
+  #   STATE.kv    = SmolLM2KVFFICache.new
+  #   STATE.gguf  = STATE.kv.realize_and_load_auto(GGUF_PATH, MAX_T,
+  #                                                  STATE.cfg, STATE.flags)
+  def realize_and_load_auto(gguf_path, max_T, cfg, flags)
+    gguf = TinyNN.tnn_gguf_load(gguf_path)
+    is_native = TinyNN.tnn_gguf_get_bool(gguf, "toy.ggml_native") == 1
+    if is_native
+      wtype = GGUFLoad.detect_weight_type(gguf_path)
+      set_weight_type(wtype)
+      realize_for_mmap(gguf, cfg, max_T, flags.untied, flags.qkv_bias)
+      puts "  BYO-pointer mmap (weight_type=" + wtype.to_s + ")"
+      gguf
+    else
+      TinyNN.tnn_gguf_free(gguf)
+      realize_for(max_T, cfg.d_model, cfg.d_ff,
+                  cfg.n_heads, cfg.n_kv,
+                  cfg.n_layers, cfg.vocab,
+                  cfg.rope_base, cfg.rms_eps,
+                  flags.untied, flags.qkv_bias)
+      load_weights(gguf_path)
+      puts "  legacy copy load"
+      TinyNN.tnn_null_ptr
+    end
   end
 
   # Per-head byte stride for slicing a full [n_heads*d_head, d_model]

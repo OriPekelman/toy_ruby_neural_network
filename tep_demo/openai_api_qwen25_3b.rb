@@ -119,7 +119,7 @@ module ApiJson
   end
 end
 
-GGUF_PATH  = "data/qwen25-3b-f32.gguf"
+GGUF_PATH  = "data/qwen25-3b-native.gguf"
 MODEL_NAME = "qwen25-3b"
 MAX_T      = 256
 
@@ -128,9 +128,11 @@ MAX_T      = 256
 #      openai_api.rb). ----
 
 class State
-  attr_accessor :cfg, :kv, :model_name, :ready
+  attr_accessor :cfg, :kv, :gguf, :model_name, :ready
   def initialize
-    @cfg = nil; @kv = nil
+    @cfg  = nil
+    @kv   = nil
+    @gguf = TinyNN.tnn_null_ptr
     @model_name = MODEL_NAME
     @ready      = false
   end
@@ -149,16 +151,13 @@ flags = GGUFLoad.detect_smollm2_flags(GGUF_PATH)
 puts "[openai_api_qwen25_3b] flags: untied=" + flags.untied.to_s +
      " qkv_bias=" + flags.qkv_bias.to_s
 
-puts "[openai_api_qwen25_3b] realising KV cache (MAX_T=" + MAX_T.to_s + ")..."
+# Auto-dispatch: native GGUFs get BYO-pointer mmap (Phase 2);
+# legacy GGUFs fall through to realize_for + load_weights copy.
+# Regenerate with `--ggml-native` (and optionally `--quantize q8_0`)
+# to unlock the mmap fast path on this binary.
+puts "[openai_api_qwen25_3b] realising (MAX_T=" + MAX_T.to_s + ")..."
 STATE.kv = SmolLM2KVFFICache.new
-STATE.kv.realize_for(MAX_T, STATE.cfg.d_model, STATE.cfg.d_ff,
-                      STATE.cfg.n_heads, STATE.cfg.n_kv,
-                      STATE.cfg.n_layers, STATE.cfg.vocab,
-                      STATE.cfg.rope_base, STATE.cfg.rms_eps,
-                      flags.untied, flags.qkv_bias)
-
-puts "[openai_api_qwen25_3b] loading weights (direct GGUF→FFI)..."
-STATE.kv.load_weights(GGUF_PATH)
+STATE.gguf = STATE.kv.realize_and_load_auto(GGUF_PATH, MAX_T, STATE.cfg, flags)
 
 STATE.ready = true
 puts "[openai_api_qwen25_3b] ready; serving"
