@@ -54,10 +54,8 @@ class SmolLM2KVFFICacheCuda
                 :max_T, :d_model, :d_ff, :n_heads, :n_kv, :d_head,
                 :group_size, :n_layers, :vocab_size, :rope_base,
                 :rms_eps, :realized,
-                # Stub to satisfy Spinel's type unification with
-                # SmolLM2KVFFICache (which uses weight_type for Phase 3
-                # Q8-stays-Q8). The CUDA path doesn't act on this yet.
-                :weight_type
+                :weight_type,
+                :gguf_handle_keepalive
 
   def initialize
     @realized   = false
@@ -79,7 +77,32 @@ class SmolLM2KVFFICacheCuda
     @has_untied_output  = false
     @has_qkv_bias       = false
     @kv_blocks_ffi      = [SmolLM2KVBlockFFICuda.new]
-    @weight_type        = 0   # stub; CUDA path doesn't act on it yet
+    @weight_type        = 0   # GGML_TYPE_F32 default
+    @gguf_handle_keepalive = TinyNNCuda.tnn_null_ptr
+  end
+
+  # Phase 3 opt-in. CUDA path currently supports F32 only — the
+  # V matmul flip required for Q8 hasn't been mirrored here yet.
+  def set_weight_type(t)
+    @weight_type = t
+  end
+
+  def alloc_2d_w(rows, cols)
+    if @weight_type == 0
+      TinyNNCuda.tnn_input_2d_f32_persistent(@sess, rows, cols)
+    else
+      TinyNNCuda.tnn_input_2d_persistent_typed(@sess, rows, cols, @weight_type)
+    end
+  end
+
+  def head_nbytes(ggml_type, d_head, d_model)
+    if ggml_type == 0
+      d_head * d_model * 4
+    elsif ggml_type == 8
+      d_head * (d_model / 32) * 34
+    else
+      0
+    end
   end
 
   # Declare every persistent tensor (weights + K/V buffers) and finalize.
@@ -165,6 +188,187 @@ class SmolLM2KVFFICacheCuda
     end
 
     TinyNNCuda.tnn_finalize_weights(@sess)
+    @realized = true
+  end
+
+  # Phase 2 BYO-pointer (CUDA). Mirror of the CPU
+  # SmolLM2KVFFICache#realize_for_mmap. Wraps the GGUF's mmap region
+  # in a CUDA backend buffer via the vendored
+  # ggml_backend_cuda_buffer_from_ptr; on GB10 unified memory this
+  # means CUDA kernels read the host-mmap pages directly via UVA.
+  #
+  # F32-only on CUDA today (the V matmul flip needed for Q8 hasn't
+  # been mirrored to the CUDA build_decode_step).
+  def realize_for_mmap(gguf_handle, cfg, max_T, untied, qkv_bias)
+    @max_T      = max_T
+    @d_model    = cfg.d_model
+    @d_ff       = cfg.d_ff
+    @n_heads    = cfg.n_heads
+    @n_kv       = cfg.n_kv
+    @d_head     = cfg.d_model / cfg.n_heads
+    @group_size = cfg.n_heads / cfg.n_kv
+    @n_layers   = cfg.n_layers
+    @vocab_size = cfg.vocab
+    @rope_base  = cfg.rope_base
+    @rms_eps    = cfg.rms_eps
+
+    @gguf_handle_keepalive = gguf_handle
+    @sess              = TinyNNCuda.tnn_session_new(1)
+    @has_untied_output = untied
+    @has_qkv_bias      = qkv_bias
+
+    map_base = TinyNNCuda.tnn_gguf_mmap_base(gguf_handle)
+    map_size = TinyNNCuda.tnn_gguf_mmap_size(gguf_handle)
+    rc = TinyNNCuda.tnn_session_attach_weight_mmap(@sess, map_base, map_size)
+    if rc != 0
+      puts "  CUDA attach_weight_mmap failed: rc=" + rc.to_s
+      return
+    end
+
+    eidx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, "token_embd.weight")
+    eoff = TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, eidx)
+    etyp = TinyNNCuda.tnn_gguf_tensor_type(gguf_handle, eidx)
+    @t_token_embed = TinyNNCuda.tnn_input_2d_persistent_mmap(@sess,
+                       @vocab_size, @d_model, etyp, eoff)
+
+    fnidx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, "output_norm.weight")
+    fnoff = TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, fnidx)
+    @t_final_norm_gamma = TinyNNCuda.tnn_input_1d_persistent_mmap(@sess,
+                            @d_model, 0, fnoff)
+
+    if untied
+      oidx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, "output.weight")
+      ooff = TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, oidx)
+      otyp = TinyNNCuda.tnn_gguf_tensor_type(gguf_handle, oidx)
+      @t_output = TinyNNCuda.tnn_input_2d_persistent_mmap(@sess,
+                    @vocab_size, @d_model, otyp, ooff)
+    end
+
+    @kv_blocks_ffi = [SmolLM2KVBlockFFICuda.new]
+    li = 1
+    while li < @n_layers
+      @kv_blocks_ffi.push(SmolLM2KVBlockFFICuda.new)
+      li = li + 1
+    end
+
+    li = 0
+    while li < @n_layers
+      blk = @kv_blocks_ffi[li]
+      prefix = "blk." + li.to_s
+
+      rn1_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".attn_norm.weight")
+      rn2_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".ffn_norm.weight")
+      blk.t_rn1_gamma = TinyNNCuda.tnn_input_1d_persistent_mmap(@sess, @d_model, 0,
+                          TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, rn1_idx))
+      blk.t_rn2_gamma = TinyNNCuda.tnn_input_1d_persistent_mmap(@sess, @d_model, 0,
+                          TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, rn2_idx))
+
+      q_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".attn_q.weight")
+      q_off_base = TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, q_idx)
+      q_type     = TinyNNCuda.tnn_gguf_tensor_type(gguf_handle, q_idx)
+      q_stride   = head_nbytes(q_type, @d_head, @d_model)
+      blk.t_w_q = [TinyNNCuda.tnn_input_2d_persistent_mmap(@sess,
+                     @d_head, @d_model, q_type, q_off_base)]
+      hq = 1
+      while hq < @n_heads
+        blk.t_w_q.push(TinyNNCuda.tnn_input_2d_persistent_mmap(@sess,
+                         @d_head, @d_model, q_type,
+                         q_off_base + hq * q_stride))
+        hq = hq + 1
+      end
+
+      k_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".attn_k.weight")
+      v_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".attn_v.weight")
+      k_off_base = TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, k_idx)
+      v_off_base = TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, v_idx)
+      k_type     = TinyNNCuda.tnn_gguf_tensor_type(gguf_handle, k_idx)
+      v_type     = TinyNNCuda.tnn_gguf_tensor_type(gguf_handle, v_idx)
+      k_stride   = head_nbytes(k_type, @d_head, @d_model)
+      v_stride   = head_nbytes(v_type, @d_head, @d_model)
+      blk.t_w_k = [TinyNNCuda.tnn_input_2d_persistent_mmap(@sess,
+                     @d_head, @d_model, k_type, k_off_base)]
+      blk.t_w_v = [TinyNNCuda.tnn_input_2d_persistent_mmap(@sess,
+                     @d_head, @d_model, v_type, v_off_base)]
+      blk.t_K   = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, max_T,  @d_head)]
+      blk.t_V   = [TinyNNCuda.tnn_input_2d_f32_persistent(@sess, @d_head, max_T)]
+      hkv = 1
+      while hkv < @n_kv
+        blk.t_w_k.push(TinyNNCuda.tnn_input_2d_persistent_mmap(@sess,
+                         @d_head, @d_model, k_type,
+                         k_off_base + hkv * k_stride))
+        blk.t_w_v.push(TinyNNCuda.tnn_input_2d_persistent_mmap(@sess,
+                         @d_head, @d_model, v_type,
+                         v_off_base + hkv * v_stride))
+        blk.t_K.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, max_T,  @d_head))
+        blk.t_V.push(TinyNNCuda.tnn_input_2d_f32_persistent(@sess, @d_head, max_T))
+        hkv = hkv + 1
+      end
+
+      if qkv_bias
+        qb_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".attn_q.bias")
+        kb_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".attn_k.bias")
+        vb_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".attn_v.bias")
+        qb_off = TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, qb_idx)
+        kb_off = TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, kb_idx)
+        vb_off = TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, vb_idx)
+        bias_stride = @d_head * 4
+        blk.t_b_q = [TinyNNCuda.tnn_input_1d_persistent_mmap(@sess, @d_head, 0, qb_off)]
+        hq = 1
+        while hq < @n_heads
+          blk.t_b_q.push(TinyNNCuda.tnn_input_1d_persistent_mmap(@sess, @d_head, 0,
+                           qb_off + hq * bias_stride))
+          hq = hq + 1
+        end
+        # CUDA V bias stays 2D [1, d_head] because CUDA build_decode_step
+        # has NOT been migrated to weight-first V matmul.
+        blk.t_b_k = [TinyNNCuda.tnn_input_1d_persistent_mmap(@sess, @d_head, 0, kb_off)]
+        blk.t_b_v = [TinyNNCuda.tnn_input_2d_persistent_mmap(@sess, @d_head, 1, 0, vb_off)]
+        hkv = 1
+        while hkv < @n_kv
+          blk.t_b_k.push(TinyNNCuda.tnn_input_1d_persistent_mmap(@sess, @d_head, 0,
+                           kb_off + hkv * bias_stride))
+          blk.t_b_v.push(TinyNNCuda.tnn_input_2d_persistent_mmap(@sess, @d_head, 1, 0,
+                           vb_off + hkv * bias_stride))
+          hkv = hkv + 1
+        end
+      end
+
+      o_idx    = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".attn_output.weight")
+      gate_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".ffn_gate.weight")
+      up_idx   = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".ffn_up.weight")
+      down_idx = TinyNNCuda.tnn_gguf_find_index(gguf_handle, prefix + ".ffn_down.weight")
+      blk.t_w_o    = TinyNNCuda.tnn_input_2d_persistent_mmap(@sess, @d_model, @d_model,
+                       TinyNNCuda.tnn_gguf_tensor_type(gguf_handle, o_idx),
+                       TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, o_idx))
+      blk.t_w_gate = TinyNNCuda.tnn_input_2d_persistent_mmap(@sess, @d_ff, @d_model,
+                       TinyNNCuda.tnn_gguf_tensor_type(gguf_handle, gate_idx),
+                       TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, gate_idx))
+      blk.t_w_up   = TinyNNCuda.tnn_input_2d_persistent_mmap(@sess, @d_ff, @d_model,
+                       TinyNNCuda.tnn_gguf_tensor_type(gguf_handle, up_idx),
+                       TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, up_idx))
+      blk.t_w_down = TinyNNCuda.tnn_input_2d_persistent_mmap(@sess, @d_model, @d_ff,
+                       TinyNNCuda.tnn_gguf_tensor_type(gguf_handle, down_idx),
+                       TinyNNCuda.tnn_gguf_tensor_file_offset(gguf_handle, down_idx))
+
+      li = li + 1
+    end
+
+    TinyNNCuda.tnn_finalize_weights(@sess)
+
+    kv_zero_k = Mat.new(max_T, @d_head)
+    kv_zero_v = Mat.new(@d_head, max_T)
+    li = 0
+    while li < @n_layers
+      blk_f = @kv_blocks_ffi[li]
+      hkv = 0
+      while hkv < @n_kv
+        TinyNNCuda.upload_row_major(@sess, blk_f.t_K[hkv], kv_zero_k)
+        TinyNNCuda.upload_row_major(@sess, blk_f.t_V[hkv], kv_zero_v)
+        hkv = hkv + 1
+      end
+      li = li + 1
+    end
+
     @realized = true
   end
 

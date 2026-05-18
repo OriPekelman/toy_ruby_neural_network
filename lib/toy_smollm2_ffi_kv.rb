@@ -17,7 +17,15 @@ require_relative "transformer"
 require_relative "toy"
 require_relative "toy_smollm2"
 require_relative "tinynn"
-require_relative "toy_smollm2_loader"
+# NOTE: not requiring "toy_smollm2_loader" here. Requiring it from
+# inside this file triggers a Spinel GC mark crash in decode_step
+# (sp_gc_mark / sp_PtrArray_new_scan) for reasons we haven't fully
+# isolated — likely something about require-order interaction with
+# Spinel's type inference around GGUFLoad. Callers that use
+# realize_and_load_auto (or any method here that references
+# GGUFLoad) must `require_relative "toy_smollm2_loader"` from their
+# top-level driver file BEFORE this file is loaded. The OpenAI API
+# binaries and the realize-mmap demos already do.
 
 # Per-block persistent tensors for the SmolLM2 KV cache.
 #
@@ -318,20 +326,14 @@ class SmolLM2KVFFICache
 
   # Auto-dispatch: open the GGUF, peek at its `toy.ggml_native` flag,
   # and route to either the BYO-pointer mmap path (Phase 2) or the
-  # legacy realize_for + load_weights copy path. The mmap path also
-  # auto-detects the weight type (F32 vs Q8 vs ...).
+  # legacy realize_for + load_weights copy path. Returns the GGUF
+  # handle (or null for the legacy path); the kv_cache holds it via
+  # @gguf_handle_keepalive so the mmap stays valid for inference.
   #
-  # Returns the GGUF handle (or null pointer for the legacy path).
-  # Caller must keep the returned handle alive for the kv_cache's
-  # lifetime when it's non-null (the mmap backs the weight tensors).
-  #
-  # Usage from a tep_demo binary:
-  #
-  #   STATE.cfg   = SmolLM2ConfigLoader.read(GGUF_PATH)
-  #   STATE.flags = GGUFLoad.detect_smollm2_flags(GGUF_PATH)
-  #   STATE.kv    = SmolLM2KVFFICache.new
-  #   STATE.gguf  = STATE.kv.realize_and_load_auto(GGUF_PATH, MAX_T,
-  #                                                  STATE.cfg, STATE.flags)
+  # Caller must have `require_relative "toy_smollm2_loader"` at the
+  # top-level driver — this file deliberately does NOT require it
+  # (require-order with GGUFLoad's methods that touch `weight_type`
+  # was triggering a Spinel GC crash in decode_step).
   def realize_and_load_auto(gguf_path, max_T, cfg, flags)
     gguf = TinyNN.tnn_gguf_load(gguf_path)
     is_native = TinyNN.tnn_gguf_get_bool(gguf, "toy.ggml_native") == 1
