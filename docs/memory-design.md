@@ -163,8 +163,40 @@ the SAME 8-token greedy continuation as the legacy loader. Load
 time drops 37% (4860 → 3071 ms) because the chunked transpose stage
 is gone.
 
-Phase 2 (real mmap) and Phase 3 (Q8-stays-Q8) are the remaining
-pieces.
+**Phase 3 shipped — Q8 stays Q8 in memory.** Persistent 2D linear
+weights can now be allocated with `GGML_TYPE_Q8_0` directly; ggml's
+`mul_mat` auto-dispatches to its Q8 vec_dot kernel for mixed
+activation-F32 × weight-Q8 ops. Opt-in via
+`kv.set_weight_type(GGUFLoad.detect_weight_type(path))` before
+`realize_for`; the new `load_kv_cache_directly_native` branches to
+the verbatim-copy primitives based on the cache's `weight_type`.
+
+One structural change required: ggml's `mul_mat` accepts the
+quantized operand only in the `src0` position. Our V matmul was the
+only call site with the weight in `src1`; flipped to weight-first,
+result shape goes `ne=[1, d_head] → ne=[d_head, 1]`, and a
+zero-copy `view_2d` reinterprets the bytes back for the V-cache
+write. V bias shape drops from 2-D to 1-D `[d_head]`. F32 parity
+preserved.
+
+Numbers:
+
+```
+                              peak RSS    steady-state    notes
+Qwen2.5-0.5B native f32         3.87 GB     same          baseline
+Qwen2.5-0.5B native Q8          1.82 GB     same          53% saving, 26% faster
+Qwen2.5-1.5B native Q8          4.56 GB     similar       (vs ~18 GB legacy)
+Qwen2.5-7B  native Q8          19.0 GB     9.4 GB         (vs ~30 GB legacy)
+```
+
+The 19 GB load peak on 7B is the double-buffer effect: ggml's
+`gguf_init_from_file` holds the entire f32-equivalent of the file
+while the verbatim-copy loader fills the persistent buffer.
+
+Phase 2 (real mmap via `ggml_backend_cpu_buffer_from_ptr`) is the
+remaining piece. CPU-only — ggml-cuda BYO-pointer requires an
+upstream patch. Predicted impact: 7B load-peak collapses from
+19 GB → ~9 GB (no double buffer).
 
 ## Current data point
 
