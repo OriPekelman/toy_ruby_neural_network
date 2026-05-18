@@ -37,6 +37,7 @@ int    tnn_gguf_tensor_is_quantized(void *handle, int i);
  * Returns -1 / 0.0 if the key is missing or has the wrong type. */
 int    tnn_gguf_get_u32(void *handle, const char *key);
 double tnn_gguf_get_f32(void *handle, const char *key);
+int    tnn_gguf_get_bool(void *handle, const char *key);
 
 /* Create a tiny GGUF file at `path` with one 2x3 f32 tensor named
  * "demo.tensor" containing [1.0, 2.0, ..., 6.0]. Useful for the
@@ -89,6 +90,19 @@ int tnn_gguf_copy_head_slice_to_persistent(void *handle, int tensor_idx,
                                             void *sess, void *target_tensor,
                                             int head_idx, int n_heads_total,
                                             int d_model, int d_head);
+
+/* Native-layout per-head slice. Source has HF-native shape
+ * [n_heads_total*d_head, d_model] row-major (i.e. heads concatenated
+ * along the leading row axis). Head h is rows [h*d_head, (h+1)*d_head),
+ * which is a contiguous (d_head, d_model) row-major block whose bytes
+ * are already in ggml ne=[d_model, d_head] column-major order. Just a
+ * memcpy — no transpose, no chunking. Used by
+ * GGUFLoad.load_kv_cache_directly_native against GGUFs converted with
+ * --ggml-native. */
+int tnn_gguf_copy_head_slice_to_persistent_native(void *handle, int tensor_idx,
+                                                    void *sess, void *target_tensor,
+                                                    int head_idx, int n_heads_total,
+                                                    int d_model, int d_head);
 
 /* Extract one head-slice from a 1-D bias tensor of length
  * (n_heads_total × d_head) and copy it to target_tensor (1-D length

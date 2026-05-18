@@ -142,13 +142,12 @@ class SmolLM2KVFFICache
     end
   end
 
-  # Ruby-OO alias for `GGUFLoad.load_kv_cache_directly(self, path)`.
-  # Lets callers write `kv.load_weights(path)` — the module-level
-  # function form remains available for compatibility. Defined here so
-  # SmolLM2KVFFICache is the canonical entry point ("realize the cache,
-  # load the weights") for inference-side use.
+  # Ruby-OO entry point for "load weights into this realized cache."
+  # Auto-detects layout: GGUFs with the `toy.ggml_native` metadata key
+  # take the memcpy path (no transpose); legacy GGUFs take the
+  # transposing path. Callers stay layout-agnostic.
   def load_weights(path)
-    GGUFLoad.load_kv_cache_directly(self, path)
+    GGUFLoad.load_kv_cache_auto(self, path)
   end
 
   # Pull any persistent FFI tensor back to a Ruby Mat (chunked download,

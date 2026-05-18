@@ -81,23 +81,41 @@ Requires touching every Mat operation. Larger blast radius.
 
 ### (C) — mmap GGUF into ggml tensors
 
-The PyTorch/llama.cpp model. On gx10 (unified memory) the mmap'd
-file pages ARE the GPU buffer — zero copy in the literal sense.
-ggml has primitives for this (`ggml_backend_alloc_ctx_tensors_from_buft`
-with a mapped buffer); llama.cpp uses them.
+The PyTorch/llama.cpp model. CPU-side, ggml exposes
+`ggml_backend_cpu_buffer_from_ptr(void *ptr, size_t size)` — wrap an
+mmap'd region as a backend buffer; tensors created within point at
+the mapped pages directly. No copy.
 
-For us: when we know the GGUF is f32 (no dequant needed), we could
-mmap the file region for each tensor and pin it as the ggml tensor's
-`data` pointer. The persistent context's buffer becomes the file's
-mapped pages.
+**CUDA correction (2026-05-18):** ggml-cuda does NOT have an
+equivalent BYO-pointer API. The closest is
+`ggml_backend_cuda_register_host_buffer`, which just calls
+`cudaHostRegister` to pin host pages so cudaMemcpy can DMA without a
+bounce buffer — the device-side buffer is still a separate
+allocation. GB10's unified memory means that device buffer is cheap
+to allocate (via ggml-cuda's `cudaMallocManaged`), but it's still a
+distinct allocation; the load-time host→device copy is unavoidable
+through the public ggml API. True zero-copy on GB10 requires
+patching ggml-cuda upstream.
+
+**Transpose finding (2026-05-18):** Our converter explicitly
+transposes 2D linear weights from HF's `[out, in]` to `[in, out]`
+during write — a legacy of the Mat-side `[in, out]` convention. That
+transpose is the only thing forcing the load-time fixup. Skipping
+it (the converter's new `--ggml-native` flag) writes bytes that
+match ggml's column-major `ne=[in, out]` layout directly, so the
+loader can `memcpy` (or, eventually, `mmap`) without touching the
+bytes. Per-head Q/K/V slices become contiguous byte ranges in the
+HF-native layout — perfect for mmap.
 
 Caveats:
-- Only works for f32 GGUFs. Quantized GGUFs need dequant on load
-  (which costs us a buffer copy anyway).
-- The file must stay open + mapped for the lifetime of the session.
-- Unified memory architectures (MPS, GB10) benefit fully — no extra
-  copy. Discrete GPUs (most NVIDIA cards) still pay the host→device
-  copy.
+- f32 GGUFs: zero-copy on CPU once mmap is wired.
+- Q8_0 GGUFs: today's loader dequantizes at load (Q8 → f32) into the
+  persistent buffer. To realize the 9 GB-vs-30 GB savings for 7B-Q8,
+  the persistent ggml tensor must be allocated with
+  `GGML_TYPE_Q8_0` directly (not f32); ggml's matmul auto-dispatches
+  to Q8 kernels for mixed activation-f32 × weight-Q8. That's Phase 3
+  below.
+- mmap'd file must stay open for the session's lifetime.
 
 ## Recommendation
 
@@ -127,6 +145,26 @@ Verified Qwen2.5-7B end-to-end:
 - Direct loader produces bit-identical first-token argmax to the
   Mat-mediated path on 0.5B and 1.5B (verified by sharing prompt
   IDs across runs and comparing `step 0 top index/val`).
+
+## Status (2026-05-18)
+
+Phase 1 of (C) — converter-side groundwork shipped. The
+`--ggml-native` flag on `prep/convert_smollm2_to_gguf.py` writes 2D
+linear weights without the legacy `[out, in] → [in, out]` transpose,
+so the bytes match ggml's column-major `ne=[in, out]` layout
+directly. Loader gains `GGUFLoad.load_kv_cache_directly_native`
+(memcpy, no chunked staging) and `GGUFLoad.load_kv_cache_auto`
+(picks via the `toy.ggml_native` metadata key). `SmolLM2KVFFICache#load_weights`
+now uses the auto-dispatcher, so callers stay layout-agnostic.
+
+Parity check on Qwen2.5-0.5B: native loader produces the SAME
+first-step logit value (`top index=264 val=12.77385425567627`) and
+the SAME 8-token greedy continuation as the legacy loader. Load
+time drops 37% (4860 → 3071 ms) because the chunked transpose stage
+is gone.
+
+Phase 2 (real mmap) and Phase 3 (Q8-stays-Q8) are the remaining
+pieces.
 
 ## Current data point
 

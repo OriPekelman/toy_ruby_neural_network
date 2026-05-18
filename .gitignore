@@ -3,6 +3,7 @@
 demos/smollm2_kv
 demos/smollm2_kv_cuda
 demos/tinyllama_kv_cuda
+demos/qwen25_direct_native
 data/tinyllama_prompt_ids.txt
 data/smollm2_prompt_ids.txt
 

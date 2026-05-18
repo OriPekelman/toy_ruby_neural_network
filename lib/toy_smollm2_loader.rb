@@ -250,6 +250,153 @@ module GGUFLoad
     TinyNN.tnn_gguf_free(handle)
     true
   end
+
+  # Native-layout direct loader. Same shape as load_kv_cache_directly
+  # but the source GGUF was written with --ggml-native — 2D linear
+  # weights are stored in HF-native [out, in] row-major, which already
+  # matches ggml's column-major ne=[in, out] byte order. All transposes
+  # are gone; per-head Q/K/V slices are contiguous byte ranges.
+  #
+  # See [[project_mmap_phase1_2026_05_18]] / docs/memory-design.md for
+  # the rationale.
+  def self.load_kv_cache_directly_native(kv_cache, path)
+    handle = TinyNN.tnn_gguf_load(path)
+    if handle == nil
+      puts "open failed: " + path
+      return false
+    end
+    n_tensors = TinyNN.tnn_gguf_n_tensors(handle)
+    puts "loading " + path + " → FFI direct (native, " + n_tensors.to_s + " tensors)"
+
+    sess     = kv_cache.sess
+    n_heads  = kv_cache.n_heads
+    n_kv     = kv_cache.n_kv
+    d_model  = kv_cache.d_model
+    d_head   = kv_cache.d_head
+    d_ff     = kv_cache.d_ff
+
+    # Globals (token_embd, output_norm, optional untied output) — these
+    # were already non-transposed even in the old converter; loader is
+    # identical to the legacy path.
+    embed_idx = TinyNN.tnn_gguf_find_index(handle, "token_embd.weight")
+    TinyNN.tnn_gguf_copy_to_persistent(handle, embed_idx,
+                                        sess, kv_cache.t_token_embed)
+
+    fn_idx = TinyNN.tnn_gguf_find_index(handle, "output_norm.weight")
+    TinyNN.tnn_gguf_copy_1d_to_persistent(handle, fn_idx,
+                                           sess, kv_cache.t_final_norm_gamma)
+
+    if kv_cache.has_untied_output
+      out_idx = TinyNN.tnn_gguf_find_index(handle, "output.weight")
+      TinyNN.tnn_gguf_copy_to_persistent(handle, out_idx,
+                                          sess, kv_cache.t_output)
+    end
+
+    li = 0
+    while li < kv_cache.n_layers
+      blk_f  = kv_cache.kv_blocks_ffi[li]
+      prefix = "blk." + li.to_s
+
+      rn1_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_norm.weight")
+      rn2_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".ffn_norm.weight")
+      TinyNN.tnn_gguf_copy_1d_to_persistent(handle, rn1_idx, sess, blk_f.t_rn1_gamma)
+      TinyNN.tnn_gguf_copy_1d_to_persistent(handle, rn2_idx, sess, blk_f.t_rn2_gamma)
+
+      # Per-head Q/K/V — native: contiguous byte range, no transpose.
+      q_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_q.weight")
+      hq = 0
+      while hq < n_heads
+        TinyNN.tnn_gguf_copy_head_slice_to_persistent_native(handle, q_idx, sess,
+                                                              blk_f.t_w_q[hq],
+                                                              hq, n_heads, d_model, d_head)
+        hq = hq + 1
+      end
+
+      k_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_k.weight")
+      v_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_v.weight")
+      hkv = 0
+      while hkv < n_kv
+        TinyNN.tnn_gguf_copy_head_slice_to_persistent_native(handle, k_idx, sess,
+                                                              blk_f.t_w_k[hkv],
+                                                              hkv, n_kv, d_model, d_head)
+        TinyNN.tnn_gguf_copy_head_slice_to_persistent_native(handle, v_idx, sess,
+                                                              blk_f.t_w_v[hkv],
+                                                              hkv, n_kv, d_model, d_head)
+        hkv = hkv + 1
+      end
+
+      # Q/K/V biases: 1-D, identical loader (biases were already
+      # take()'d untransposed even in the legacy converter).
+      if kv_cache.has_qkv_bias
+        qb_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_q.bias")
+        kb_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_k.bias")
+        vb_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_v.bias")
+        hq = 0
+        while hq < n_heads
+          TinyNN.tnn_gguf_copy_head_bias_slice_to_persistent(handle, qb_idx, sess,
+                                                              blk_f.t_b_q[hq], hq, d_head)
+          hq = hq + 1
+        end
+        hkv = 0
+        while hkv < n_kv
+          TinyNN.tnn_gguf_copy_head_bias_slice_to_persistent(handle, kb_idx, sess,
+                                                              blk_f.t_b_k[hkv], hkv, d_head)
+          TinyNN.tnn_gguf_copy_head_bias_slice_to_persistent(handle, vb_idx, sess,
+                                                              blk_f.t_b_v[hkv], hkv, d_head)
+          hkv = hkv + 1
+        end
+      end
+
+      # O / FFN gate / up / down — native: plain memcpy, no transpose
+      # stage. The native GGUF already stores them in ggml's expected
+      # column-major byte order.
+      o_idx    = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_output.weight")
+      gate_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".ffn_gate.weight")
+      up_idx   = TinyNN.tnn_gguf_find_index(handle, prefix + ".ffn_up.weight")
+      down_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".ffn_down.weight")
+      TinyNN.tnn_gguf_copy_to_persistent(handle, o_idx,    sess, blk_f.t_w_o)
+      TinyNN.tnn_gguf_copy_to_persistent(handle, gate_idx, sess, blk_f.t_w_gate)
+      TinyNN.tnn_gguf_copy_to_persistent(handle, up_idx,   sess, blk_f.t_w_up)
+      TinyNN.tnn_gguf_copy_to_persistent(handle, down_idx, sess, blk_f.t_w_down)
+
+      li = li + 1
+    end
+
+    # Zero-init K/V buffers (same as the legacy path).
+    kv_zero_k = Mat.new(kv_cache.max_T, d_head)
+    kv_zero_v = Mat.new(d_head, kv_cache.max_T)
+    li = 0
+    while li < kv_cache.n_layers
+      blk_f = kv_cache.kv_blocks_ffi[li]
+      hkv = 0
+      while hkv < n_kv
+        TinyNN.upload_row_major(sess, blk_f.t_K[hkv], kv_zero_k)
+        TinyNN.upload_row_major(sess, blk_f.t_V[hkv], kv_zero_v)
+        hkv = hkv + 1
+      end
+      li = li + 1
+    end
+
+    TinyNN.tnn_gguf_free(handle)
+    true
+  end
+
+  # Auto-dispatcher: peek at the toy.ggml_native metadata key and pick
+  # the matching loader. Keeps callers ignorant of the file layout.
+  def self.load_kv_cache_auto(kv_cache, path)
+    handle = TinyNN.tnn_gguf_load(path)
+    if handle == nil
+      puts "open failed: " + path
+      return false
+    end
+    is_native = TinyNN.tnn_gguf_get_bool(handle, "toy.ggml_native") == 1
+    TinyNN.tnn_gguf_free(handle)
+    if is_native
+      load_kv_cache_directly_native(kv_cache, path)
+    else
+      load_kv_cache_directly(kv_cache, path)
+    end
+  end
 end
 
 module SmolLM2ConfigLoader

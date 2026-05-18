@@ -158,6 +158,19 @@ double tnn_gguf_get_f32(void *handle, const char *key)
     return (double)gguf_get_val_f32(s->gguf_ctx, kid);
 }
 
+/* Bool metadata. Returns 1 if key is present and true, 0 if false or
+ * missing. */
+int tnn_gguf_get_bool(void *handle, const char *key)
+{
+    if (!handle || !key) return 0;
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    int64_t kid = gguf_find_key(s->gguf_ctx, key);
+    if (kid < 0) return 0;
+    enum gguf_type t = gguf_get_kv_type(s->gguf_ctx, kid);
+    if (t != GGUF_TYPE_BOOL) return 0;
+    return gguf_get_val_bool(s->gguf_ctx, kid) ? 1 : 0;
+}
+
 /* --- direct GGUF → FFI persistent buffer loaders ------------------ */
 
 /* Helper: get a pointer to the tensor's f32 data, dequantizing into
@@ -364,6 +377,40 @@ int tnn_gguf_copy_head_slice_to_persistent(void *handle, int tensor_idx,
         k_start = k_end;
     }
     free(stage);
+    free(owned);
+    return 0;
+}
+
+/* Native-layout per-head slice: HF-native source has shape
+ * [n_heads_total * d_head, d_model] row-major. Head h occupies rows
+ * [h*d_head, (h+1)*d_head); that block is a contiguous (d_head, d_model)
+ * row-major slice. Those bytes already match ggml ne=[d_model, d_head]
+ * column-major (because for j in d_head: for i in d_model: is the same
+ * iteration order), so this is a plain ggml_backend_tensor_set with no
+ * transpose stage. Used by GGUFLoad.load_kv_cache_directly_native to
+ * fill the per-head t_w_q / t_w_k / t_w_v persistent tensors. */
+int tnn_gguf_copy_head_slice_to_persistent_native(void *handle, int tensor_idx,
+                                                    void *sess, void *target_tensor,
+                                                    int head_idx, int n_heads_total,
+                                                    int d_model, int d_head)
+{
+    (void)sess;
+    if (!handle || !target_tensor || head_idx < 0 || n_heads_total <= 0
+        || d_model <= 0 || d_head <= 0) return -1;
+    if (head_idx >= n_heads_total) return -1;
+
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    struct ggml_tensor *dst = (struct ggml_tensor *)target_tensor;
+
+    size_t total = (size_t)d_model * (size_t)n_heads_total * (size_t)d_head;
+    float *owned = NULL;
+    int err = 0;
+    const float *src = gguf_tensor_as_f32(s, tensor_idx, total, &owned, &err);
+    if (!src) return err;
+
+    size_t head_floats = (size_t)d_head * (size_t)d_model;
+    size_t head_off    = (size_t)head_idx * head_floats;
+    ggml_backend_tensor_set(dst, src + head_off, 0, head_floats * sizeof(float));
     free(owned);
     return 0;
 }

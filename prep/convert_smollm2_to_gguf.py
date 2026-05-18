@@ -78,6 +78,14 @@ def main():
                          "(~8× smaller, ~3-5% noise), q5_0 (in between). "
                          "Embeddings, biases, and norms stay f32. K-quants "
                          "(Q4_K_M etc.) need ggml's C-side quantizer.")
+    ap.add_argument("--ggml-native", action="store_true",
+                    help="Write 2D linear weights in HF-native [out, in] "
+                         "row-major (no transpose). The resulting bytes "
+                         "match ggml's column-major ne=[in, out] layout "
+                         "directly, enabling zero-copy mmap loading. The "
+                         "loader picks this path automatically via the "
+                         "'toy.ggml_native' metadata key. NOT compatible "
+                         "with the old transposed loader path.")
     args = ap.parse_args()
 
     qtype = None
@@ -161,9 +169,14 @@ def main():
     def take(name: str) -> np.ndarray:
         return _load_f32(name)
 
-    # nn.Linear convention: weight.shape == [out, in]. We need [in, out]
-    # to match our Mat layout. Single tensor → single transpose.
+    # nn.Linear convention: weight.shape == [out, in]. The original Mat
+    # path needed [in, out], which costs a transpose here. The native
+    # path (--ggml-native) preserves [out, in] — ggml's column-major
+    # ne=[in, out] reads those bytes directly without fixup, so we can
+    # mmap rather than copy.
     def take_T(name: str) -> np.ndarray:
+        if args.ggml_native:
+            return _load_f32(name)
         return np.ascontiguousarray(_load_f32(name).T)
 
     print(f"[3/4] writing GGUF → {args.out}")
@@ -180,6 +193,11 @@ def main():
     w.add_layer_norm_rms_eps(rms_eps)
     w.add_file_type(gguf.LlamaFileType.ALL_F32)  # file_type metadata is informational
     w.add_uint32("llama.vocab_size", n_vocab)
+    # Layout flag. When set, the loader knows 2D linear weights are in
+    # HF-native [out, in] row-major and can be mmap'd / memcpy'd into
+    # ggml ne=[in, out] without transpose.
+    if args.ggml_native:
+        w.add_bool("toy.ggml_native", True)
 
     # Quantize 2-D weight tensors when --quantize is set. add() wraps
     # w.add_tensor so quantization is transparent at the call sites.
