@@ -5,10 +5,24 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
+/* Phase 2 (memory-design): we now load GGUFs with no_alloc=true and
+ * mmap the file ourselves. Tensor byte accessors point into the
+ * mapped region directly — no double-buffer at load. The persistent
+ * destination buffer is still a separate allocation, but the source
+ * side no longer materializes a full f32-equivalent copy of the
+ * file. */
 typedef struct {
     struct gguf_context *gguf_ctx;
-    struct ggml_context *ggml_ctx;
+    struct ggml_context *ggml_ctx;   /* tensors have NULL data with no_alloc */
+    int    fd;                       /* -1 for "empty" sessions */
+    void  *map;                      /* NULL if no mmap (empty session) */
+    size_t map_size;
+    size_t data_offset;              /* gguf data section start, absolute */
 } tnn_gguf_session;
 
 void *tnn_gguf_load(const char *path)
@@ -16,14 +30,38 @@ void *tnn_gguf_load(const char *path)
     if (!path) return NULL;
     struct ggml_context *ggml_ctx = NULL;
     struct gguf_init_params params;
-    params.no_alloc = false;
+    params.no_alloc = true;   /* Phase 2: tensor data lives in mmap, not in ctx */
     params.ctx      = &ggml_ctx;
     struct gguf_context *gctx = gguf_init_from_file(path, params);
     if (!gctx) return NULL;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { gguf_free(gctx); if (ggml_ctx) ggml_free(ggml_ctx); return NULL; }
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        close(fd); gguf_free(gctx); if (ggml_ctx) ggml_free(ggml_ctx); return NULL;
+    }
+    size_t fsize = (size_t)st.st_size;
+    void *map = mmap(NULL, fsize, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) {
+        close(fd); gguf_free(gctx); if (ggml_ctx) ggml_free(ggml_ctx); return NULL;
+    }
+    /* Hint the kernel that we'll touch most pages once. Keeps the
+     * page-cache footprint friendlier under memory pressure. */
+    madvise(map, fsize, MADV_RANDOM);
+
     tnn_gguf_session *s = (tnn_gguf_session *)calloc(1, sizeof(*s));
-    if (!s) { gguf_free(gctx); if (ggml_ctx) ggml_free(ggml_ctx); return NULL; }
-    s->gguf_ctx = gctx;
-    s->ggml_ctx = ggml_ctx;
+    if (!s) {
+        munmap(map, fsize); close(fd);
+        gguf_free(gctx); if (ggml_ctx) ggml_free(ggml_ctx);
+        return NULL;
+    }
+    s->gguf_ctx    = gctx;
+    s->ggml_ctx    = ggml_ctx;
+    s->fd          = fd;
+    s->map         = map;
+    s->map_size    = fsize;
+    s->data_offset = gguf_get_data_offset(gctx);
     return s;
 }
 
@@ -33,6 +71,8 @@ void *tnn_gguf_load_empty(void)
     if (!s) return NULL;
     s->gguf_ctx = gguf_init_empty();
     s->ggml_ctx = NULL;
+    s->fd       = -1;
+    s->map      = NULL;
     return s;
 }
 
@@ -40,9 +80,20 @@ void tnn_gguf_free(void *handle)
 {
     if (!handle) return;
     tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    if (s->map) munmap(s->map, s->map_size);
+    if (s->fd > 0) close(s->fd);
     if (s->ggml_ctx) ggml_free(s->ggml_ctx);
     if (s->gguf_ctx) gguf_free(s->gguf_ctx);
     free(s);
+}
+
+/* Compute the pointer inside the mmap region for tensor `tensor_idx`'s
+ * raw bytes. Returns NULL if the session has no mmap (empty session). */
+static const void *gguf_tensor_mmap_ptr(tnn_gguf_session *s, int tensor_idx)
+{
+    if (!s->map) return NULL;
+    size_t off = gguf_get_tensor_offset(s->gguf_ctx, (int64_t)tensor_idx);
+    return (const char *)s->map + s->data_offset + off;
 }
 
 int tnn_gguf_n_tensors(void *handle)
@@ -92,13 +143,15 @@ int tnn_gguf_read_f32_to_doubles(void *handle, int i, double *out, size_t n)
     const char *name = gguf_get_tensor_name(s->gguf_ctx, (int64_t)i);
     if (!name) return -3;
     struct ggml_tensor *t = ggml_get_tensor(s->ggml_ctx, name);
-    if (!t || !t->data) return -4;
+    if (!t) return -4;
+    const void *src_bytes = gguf_tensor_mmap_ptr(s, i);
+    if (!src_bytes) return -4;
     size_t available = ggml_nelements(t);
     if (n > available) n = available;
 
     /* F32: direct copy. */
     if (t->type == GGML_TYPE_F32) {
-        const float *src = (const float *)t->data;
+        const float *src = (const float *)src_bytes;
         for (size_t k = 0; k < n; ++k) out[k] = (double)src[k];
         return 0;
     }
@@ -114,7 +167,7 @@ int tnn_gguf_read_f32_to_doubles(void *handle, int i, double *out, size_t n)
      * elements (the full tensor) and then only forward `n` of them. */
     float *fbuf = (float *)malloc(available * sizeof(float));
     if (!fbuf) return -6;
-    traits->to_float(t->data, fbuf, (int64_t)available);
+    traits->to_float(src_bytes, fbuf, (int64_t)available);
     for (size_t k = 0; k < n; ++k) out[k] = (double)fbuf[k];
     free(fbuf);
     return 0;
@@ -171,10 +224,10 @@ int tnn_gguf_get_bool(void *handle, const char *key)
     return gguf_get_val_bool(s->gguf_ctx, kid) ? 1 : 0;
 }
 
-/* Helper: locate the raw bytes of a GGUF tensor in the open file's
- * loaded ggml context. No dequant — caller wants the on-disk type
- * preserved (Phase 3 of memory-design.md: Q8 stays Q8 in memory).
- * Returns NULL on missing tensor or unallocated data. */
+/* Helper: locate the raw bytes of a GGUF tensor in the mmap'd file.
+ * No dequant — caller wants the on-disk type preserved (Phase 3 of
+ * memory-design.md: Q8 stays Q8 in memory). Phase 2: the bytes live
+ * in the mmap region, not a ggml-context-owned buffer. */
 static const void *gguf_tensor_raw_bytes(tnn_gguf_session *s, int tensor_idx,
                                            size_t *out_nbytes,
                                            int *out_ggml_type)
@@ -182,10 +235,10 @@ static const void *gguf_tensor_raw_bytes(tnn_gguf_session *s, int tensor_idx,
     const char *name = gguf_get_tensor_name(s->gguf_ctx, (int64_t)tensor_idx);
     if (!name) return NULL;
     struct ggml_tensor *t = ggml_get_tensor(s->ggml_ctx, name);
-    if (!t || !t->data) return NULL;
+    if (!t) return NULL;
     if (out_nbytes)    *out_nbytes    = ggml_nbytes(t);
     if (out_ggml_type) *out_ggml_type = (int)t->type;
-    return t->data;
+    return gguf_tensor_mmap_ptr(s, tensor_idx);
 }
 
 /* Copy raw bytes from a GGUF tensor verbatim into a persistent tensor.
@@ -254,7 +307,9 @@ static const float *gguf_tensor_as_f32(tnn_gguf_session *s, int tensor_idx,
     const char *name = gguf_get_tensor_name(s->gguf_ctx, (int64_t)tensor_idx);
     if (!name) { *err = -3; return NULL; }
     struct ggml_tensor *t = ggml_get_tensor(s->ggml_ctx, name);
-    if (!t || !t->data) { *err = -4; return NULL; }
+    if (!t) { *err = -4; return NULL; }
+    const void *src_bytes = gguf_tensor_mmap_ptr(s, tensor_idx);
+    if (!src_bytes) { *err = -4; return NULL; }
     size_t avail = ggml_nelements(t);
     if (expect_n > 0 && expect_n != avail) {
         /* Tolerated when expect_n==0 (caller doesn't know); otherwise
@@ -263,13 +318,13 @@ static const float *gguf_tensor_as_f32(tnn_gguf_session *s, int tensor_idx,
         return NULL;
     }
     if (t->type == GGML_TYPE_F32) {
-        return (const float *)t->data;
+        return (const float *)src_bytes;
     }
     const struct ggml_type_traits *traits = ggml_get_type_traits(t->type);
     if (!traits || !traits->to_float) { *err = -5; return NULL; }
     float *fbuf = (float *)malloc(avail * sizeof(float));
     if (!fbuf) { *err = -6; return NULL; }
-    traits->to_float(t->data, fbuf, (int64_t)avail);
+    traits->to_float(src_bytes, fbuf, (int64_t)avail);
     *owned_buf = fbuf;
     return fbuf;
 }
