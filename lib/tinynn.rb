@@ -383,6 +383,7 @@ module TinyNN
   ffi_func :tnn_set_param,        [:ptr],                   :void
   ffi_func :tnn_input_1d_f32,     [:ptr, :int],             :ptr
   ffi_func :tnn_input_2d_f32_persistent, [:ptr, :int, :int],   :ptr
+  ffi_func :tnn_input_2d_persistent_typed, [:ptr, :int, :int, :int], :ptr
   ffi_func :tnn_input_1d_f32_persistent, [:ptr, :int],         :ptr
   ffi_func :tnn_finalize_weights, [:ptr],                   :int
   ffi_func :tnn_realize_b,        [:ptr, :ptr],             :int
@@ -421,6 +422,10 @@ module TinyNN
            [:ptr, :int, :ptr, :ptr, :int, :int, :int, :int], :int
   ffi_func :tnn_gguf_copy_head_slice_to_persistent_native,
            [:ptr, :int, :ptr, :ptr, :int, :int, :int, :int], :int
+  ffi_func :tnn_gguf_copy_verbatim_to_persistent,
+           [:ptr, :int, :ptr, :ptr], :int
+  ffi_func :tnn_gguf_copy_verbatim_head_slice_to_persistent,
+           [:ptr, :int, :ptr, :ptr, :int, :int], :int
   ffi_func :tnn_gguf_copy_head_bias_slice_to_persistent,
            [:ptr, :int, :ptr, :ptr, :int, :int], :int
   ffi_func :tnn_scratch_set_i32,  [:ptr, :int, :int],       :void

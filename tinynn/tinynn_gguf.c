@@ -171,6 +171,75 @@ int tnn_gguf_get_bool(void *handle, const char *key)
     return gguf_get_val_bool(s->gguf_ctx, kid) ? 1 : 0;
 }
 
+/* Helper: locate the raw bytes of a GGUF tensor in the open file's
+ * loaded ggml context. No dequant — caller wants the on-disk type
+ * preserved (Phase 3 of memory-design.md: Q8 stays Q8 in memory).
+ * Returns NULL on missing tensor or unallocated data. */
+static const void *gguf_tensor_raw_bytes(tnn_gguf_session *s, int tensor_idx,
+                                           size_t *out_nbytes,
+                                           int *out_ggml_type)
+{
+    const char *name = gguf_get_tensor_name(s->gguf_ctx, (int64_t)tensor_idx);
+    if (!name) return NULL;
+    struct ggml_tensor *t = ggml_get_tensor(s->ggml_ctx, name);
+    if (!t || !t->data) return NULL;
+    if (out_nbytes)    *out_nbytes    = ggml_nbytes(t);
+    if (out_ggml_type) *out_ggml_type = (int)t->type;
+    return t->data;
+}
+
+/* Copy raw bytes from a GGUF tensor verbatim into a persistent tensor.
+ * Used for quantized weights where the persistent tensor was allocated
+ * with the same ggml type (e.g. GGML_TYPE_Q8_0). Asserts type + size
+ * match the destination. Returns 0 on success. */
+int tnn_gguf_copy_verbatim_to_persistent(void *handle, int tensor_idx,
+                                          void *sess, void *target_tensor)
+{
+    (void)sess;
+    if (!handle || !target_tensor || tensor_idx < 0) return -1;
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    struct ggml_tensor *dst = (struct ggml_tensor *)target_tensor;
+
+    size_t src_nbytes = 0;
+    int    src_type   = 0;
+    const void *src = gguf_tensor_raw_bytes(s, tensor_idx, &src_nbytes, &src_type);
+    if (!src) return -2;
+    if (src_type != (int)dst->type) return -3;
+    if (src_nbytes != ggml_nbytes(dst)) return -4;
+
+    ggml_backend_tensor_set(dst, src, 0, src_nbytes);
+    return 0;
+}
+
+/* Per-head verbatim slice. Source HF-native [n_heads_total*d_head, d_model]
+ * in whatever ggml type the GGUF stores. Head h occupies a contiguous
+ * byte range — head_nbytes is ggml_nbytes(dst), starting offset is
+ * head_idx * head_nbytes from the source tensor base. Works for f32
+ * and any block-quantized type whose block size divides d_model. */
+int tnn_gguf_copy_verbatim_head_slice_to_persistent(void *handle, int tensor_idx,
+                                                      void *sess, void *target_tensor,
+                                                      int head_idx, int n_heads_total)
+{
+    (void)sess;
+    if (!handle || !target_tensor || head_idx < 0 || n_heads_total <= 0) return -1;
+    if (head_idx >= n_heads_total) return -1;
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    struct ggml_tensor *dst = (struct ggml_tensor *)target_tensor;
+
+    size_t src_nbytes = 0;
+    int    src_type   = 0;
+    const void *src = gguf_tensor_raw_bytes(s, tensor_idx, &src_nbytes, &src_type);
+    if (!src) return -2;
+    if (src_type != (int)dst->type) return -3;
+
+    size_t head_nbytes = ggml_nbytes(dst);
+    if (head_nbytes * (size_t)n_heads_total != src_nbytes) return -4;
+
+    size_t head_off = (size_t)head_idx * head_nbytes;
+    ggml_backend_tensor_set(dst, (const char *)src + head_off, 0, head_nbytes);
+    return 0;
+}
+
 /* --- direct GGUF → FFI persistent buffer loaders ------------------ */
 
 /* Helper: get a pointer to the tensor's f32 data, dequantizing into

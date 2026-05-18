@@ -37,7 +37,7 @@ class SmolLM2KVBlockFFI
     @t_w_v  = [TinyNN.tnn_null_ptr]
     @t_b_q  = [TinyNN.tnn_null_ptr]   # per-Q-head bias (Qwen2.x)
     @t_b_k  = [TinyNN.tnn_null_ptr]   # per-KV-head bias
-    @t_b_v  = [TinyNN.tnn_null_ptr]   # per-KV-head bias (2-D [1, d_head] for v matmul shape)
+    @t_b_v  = [TinyNN.tnn_null_ptr]   # per-KV-head bias (1-D [d_head])
     @t_K    = [TinyNN.tnn_null_ptr]
     @t_V    = [TinyNN.tnn_null_ptr]
     @t_w_o    = TinyNN.tnn_null_ptr
@@ -54,7 +54,12 @@ class SmolLM2KVFFICache
                 :max_T, :d_model, :d_ff, :n_heads, :n_kv, :d_head,
                 :group_size, :n_layers, :vocab_size, :rope_base,
                 :rms_eps, :realized,
-                :trace_on, :trace_names, :trace_tensors
+                :trace_on, :trace_names, :trace_tensors,
+                # Phase 3: ggml type for 2D linear weights. Default
+                # 0 = GGML_TYPE_F32 (legacy). 8 = GGML_TYPE_Q8_0. Set
+                # via #set_weight_type before #realize_for to keep
+                # quantized weights quantized in memory.
+                :weight_type
 
   def initialize
     @realized   = false
@@ -88,6 +93,27 @@ class SmolLM2KVFFICache
     @trace_names.pop
     @trace_tensors = [TinyNN.tnn_null_ptr]
     @trace_tensors.pop
+    @weight_type   = 0   # GGML_TYPE_F32; legacy default
+  end
+
+  # Phase 3 opt-in: set the ggml type used for 2D linear weights when
+  # realize_for runs. 0 = F32, 8 = Q8_0. Call BEFORE realize_for —
+  # the persistent tensors are allocated there.
+  def set_weight_type(t)
+    @weight_type = t
+  end
+
+  # Allocate one persistent 2D linear weight tensor at the configured
+  # type. Used by realize_for; keeps the Q8/F32 branch in one place.
+  # Non-2D-linear tensors (norms, biases, K/V cache, t_output) stay
+  # F32 even in Q8 mode — quantizing them costs accuracy with no
+  # compute saving.
+  def alloc_2d_w(rows, cols)
+    if @weight_type == 0
+      TinyNN.tnn_input_2d_f32_persistent(@sess, rows, cols)
+    else
+      TinyNN.tnn_input_2d_persistent_typed(@sess, rows, cols, @weight_type)
+    end
   end
 
   def enable_trace!
@@ -189,7 +215,7 @@ class SmolLM2KVFFICache
     @has_untied_output  = untied
     @has_qkv_bias       = qkv_bias
     if untied
-      @t_output = TinyNN.tnn_input_2d_f32_persistent(@sess, vocab_size, d_model)
+      @t_output = alloc_2d_w(vocab_size, d_model)
     end
 
     @kv_blocks_ffi = [SmolLM2KVBlockFFI.new]
@@ -205,48 +231,50 @@ class SmolLM2KVFFICache
       blk.t_rn1_gamma = TinyNN.tnn_input_1d_f32_persistent(@sess, d_model)
       blk.t_rn2_gamma = TinyNN.tnn_input_1d_f32_persistent(@sess, d_model)
 
-      # Q: n_heads per-head matrices of (d_head, d_model) (transposed for ggml).
-      blk.t_w_q = [TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, d_model)]
+      # Q: n_heads per-head matrices of (d_head, d_model). Quantizable.
+      blk.t_w_q = [alloc_2d_w(d_head, d_model)]
       if qkv_bias
         blk.t_b_q = [TinyNN.tnn_input_1d_f32_persistent(@sess, d_head)]
       end
       hq = 1
       while hq < n_heads
-        blk.t_w_q.push(TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, d_model))
+        blk.t_w_q.push(alloc_2d_w(d_head, d_model))
         if qkv_bias
           blk.t_b_q.push(TinyNN.tnn_input_1d_f32_persistent(@sess, d_head))
         end
         hq = hq + 1
       end
 
-      # K, V (and the persistent K/V buffers): n_kv per-head.
-      blk.t_w_k = [TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, d_model)]
-      blk.t_w_v = [TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, d_model)]
+      # K, V (and the persistent K/V buffers): n_kv per-head. Linear
+      # weights quantizable; K/V cache buffers and biases stay F32.
+      blk.t_w_k = [alloc_2d_w(d_head, d_model)]
+      blk.t_w_v = [alloc_2d_w(d_head, d_model)]
       blk.t_K   = [TinyNN.tnn_input_2d_f32_persistent(@sess, max_T,  d_head)]
       blk.t_V   = [TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, max_T)]
       if qkv_bias
         # K bias: 1-D (broadcasts over [d_head, 1] k matmul result).
-        # V bias: 2-D [1, d_head] to match the v matmul ne=[1, d_head] result.
+        # V bias: 1-D too (the V matmul is now ordered weight-first, so
+        # its result is [d_head, 1] like K — matches a 1-D bias).
         blk.t_b_k = [TinyNN.tnn_input_1d_f32_persistent(@sess, d_head)]
-        blk.t_b_v = [TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, 1)]
+        blk.t_b_v = [TinyNN.tnn_input_1d_f32_persistent(@sess, d_head)]
       end
       hkv = 1
       while hkv < n_kv
-        blk.t_w_k.push(TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, d_model))
-        blk.t_w_v.push(TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, d_model))
+        blk.t_w_k.push(alloc_2d_w(d_head, d_model))
+        blk.t_w_v.push(alloc_2d_w(d_head, d_model))
         blk.t_K.push(TinyNN.tnn_input_2d_f32_persistent(@sess, max_T,  d_head))
         blk.t_V.push(TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, max_T))
         if qkv_bias
           blk.t_b_k.push(TinyNN.tnn_input_1d_f32_persistent(@sess, d_head))
-          blk.t_b_v.push(TinyNN.tnn_input_2d_f32_persistent(@sess, d_head, 1))
+          blk.t_b_v.push(TinyNN.tnn_input_1d_f32_persistent(@sess, d_head))
         end
         hkv = hkv + 1
       end
 
-      blk.t_w_o    = TinyNN.tnn_input_2d_f32_persistent(@sess, d_model, d_model)
-      blk.t_w_gate = TinyNN.tnn_input_2d_f32_persistent(@sess, d_ff,    d_model)
-      blk.t_w_up   = TinyNN.tnn_input_2d_f32_persistent(@sess, d_ff,    d_model)
-      blk.t_w_down = TinyNN.tnn_input_2d_f32_persistent(@sess, d_model, d_ff)
+      blk.t_w_o    = alloc_2d_w(d_model, d_model)
+      blk.t_w_gate = alloc_2d_w(d_ff,    d_model)
+      blk.t_w_up   = alloc_2d_w(d_ff,    d_model)
+      blk.t_w_down = alloc_2d_w(d_model, d_ff)
       li = li + 1
     end
 
@@ -318,9 +346,14 @@ class SmolLM2KVFFICache
       if hkv == 0
         t_k_rot = trace_tap(tag + "k_rot", t_k_rot)
       end
-      t_v_raw = TinyNN.tnn_matmul(@sess, t_h, blk.t_w_v[hkv])         # ne=[1, d_head]
+      # V matmul: weight in A position so ggml's matmul kernel can
+      # dispatch to Q8 (and other quantized) kernels. Result is
+      # [d_head, 1] instead of the legacy [1, d_head]; a contiguous
+      # view_2d before the cpy reinterprets it as a [1, d_head] row
+      # without moving bytes.
+      t_v_raw = TinyNN.tnn_matmul(@sess, blk.t_w_v[hkv], t_h)         # ne=[d_head, 1]
       if @has_qkv_bias
-        t_v_new = TinyNN.tnn_add(@sess, t_v_raw, blk.t_b_v[hkv])
+        t_v_new = TinyNN.tnn_add(@sess, t_v_raw, blk.t_b_v[hkv])      # bias is 1-D [d_head]
       else
         t_v_new = t_v_raw
       end
@@ -333,7 +366,9 @@ class SmolLM2KVFFICache
       t_cpy_k = TinyNN.tnn_cpy(@sess, t_k_rot, t_K_slot)
       t_V_slot = TinyNN.tnn_view_2d(@sess, blk.t_V[hkv],
                                       1, @d_head, bytes_max_T, pos * 4)
-      t_cpy_v = TinyNN.tnn_cpy(@sess, t_v_new, t_V_slot)
+      # Re-interpret [d_head, 1] as [1, d_head] (same contiguous bytes).
+      t_v_row = TinyNN.tnn_view_2d(@sess, t_v_new, 1, @d_head, 4, 0)
+      t_cpy_v = TinyNN.tnn_cpy(@sess, t_v_row, t_V_slot)
       TinyNN.tnn_add_to_graph(@sess, t_cpy_k)
       TinyNN.tnn_add_to_graph(@sess, t_cpy_v)
       hkv = hkv + 1

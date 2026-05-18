@@ -288,8 +288,13 @@ module GGUFLoad
 
     if kv_cache.has_untied_output
       out_idx = TinyNN.tnn_gguf_find_index(handle, "output.weight")
-      TinyNN.tnn_gguf_copy_to_persistent(handle, out_idx,
-                                          sess, kv_cache.t_output)
+      if kv_cache.weight_type != 0
+        TinyNN.tnn_gguf_copy_verbatim_to_persistent(handle, out_idx,
+                                                     sess, kv_cache.t_output)
+      else
+        TinyNN.tnn_gguf_copy_to_persistent(handle, out_idx,
+                                            sess, kv_cache.t_output)
+      end
     end
 
     li = 0
@@ -302,13 +307,25 @@ module GGUFLoad
       TinyNN.tnn_gguf_copy_1d_to_persistent(handle, rn1_idx, sess, blk_f.t_rn1_gamma)
       TinyNN.tnn_gguf_copy_1d_to_persistent(handle, rn2_idx, sess, blk_f.t_rn2_gamma)
 
-      # Per-head Q/K/V — native: contiguous byte range, no transpose.
+      # Per-head Q/K/V — native layout: contiguous byte range. When the
+      # cache is in Q8 mode (Phase 3) we use the verbatim head-slice
+      # helper, which is type-agnostic and just memcpys the right
+      # contiguous range. For F32 mode the f32 helper does the same
+      # plus a dequant fallback (in case the GGUF is Q8 but the cache
+      # is F32 — old behavior).
+      use_verbatim = kv_cache.weight_type != 0
       q_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_q.weight")
       hq = 0
       while hq < n_heads
-        TinyNN.tnn_gguf_copy_head_slice_to_persistent_native(handle, q_idx, sess,
-                                                              blk_f.t_w_q[hq],
-                                                              hq, n_heads, d_model, d_head)
+        if use_verbatim
+          TinyNN.tnn_gguf_copy_verbatim_head_slice_to_persistent(handle, q_idx, sess,
+                                                                  blk_f.t_w_q[hq],
+                                                                  hq, n_heads)
+        else
+          TinyNN.tnn_gguf_copy_head_slice_to_persistent_native(handle, q_idx, sess,
+                                                                blk_f.t_w_q[hq],
+                                                                hq, n_heads, d_model, d_head)
+        end
         hq = hq + 1
       end
 
@@ -316,12 +333,19 @@ module GGUFLoad
       v_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_v.weight")
       hkv = 0
       while hkv < n_kv
-        TinyNN.tnn_gguf_copy_head_slice_to_persistent_native(handle, k_idx, sess,
-                                                              blk_f.t_w_k[hkv],
-                                                              hkv, n_kv, d_model, d_head)
-        TinyNN.tnn_gguf_copy_head_slice_to_persistent_native(handle, v_idx, sess,
-                                                              blk_f.t_w_v[hkv],
-                                                              hkv, n_kv, d_model, d_head)
+        if use_verbatim
+          TinyNN.tnn_gguf_copy_verbatim_head_slice_to_persistent(handle, k_idx, sess,
+                                                                  blk_f.t_w_k[hkv], hkv, n_kv)
+          TinyNN.tnn_gguf_copy_verbatim_head_slice_to_persistent(handle, v_idx, sess,
+                                                                  blk_f.t_w_v[hkv], hkv, n_kv)
+        else
+          TinyNN.tnn_gguf_copy_head_slice_to_persistent_native(handle, k_idx, sess,
+                                                                blk_f.t_w_k[hkv],
+                                                                hkv, n_kv, d_model, d_head)
+          TinyNN.tnn_gguf_copy_head_slice_to_persistent_native(handle, v_idx, sess,
+                                                                blk_f.t_w_v[hkv],
+                                                                hkv, n_kv, d_model, d_head)
+        end
         hkv = hkv + 1
       end
 
@@ -347,17 +371,23 @@ module GGUFLoad
         end
       end
 
-      # O / FFN gate / up / down — native: plain memcpy, no transpose
-      # stage. The native GGUF already stores them in ggml's expected
-      # column-major byte order.
+      # O / FFN gate / up / down — native: plain memcpy. Q8 mode
+      # uses the verbatim primitive (same shape; type-preserving).
       o_idx    = TinyNN.tnn_gguf_find_index(handle, prefix + ".attn_output.weight")
       gate_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".ffn_gate.weight")
       up_idx   = TinyNN.tnn_gguf_find_index(handle, prefix + ".ffn_up.weight")
       down_idx = TinyNN.tnn_gguf_find_index(handle, prefix + ".ffn_down.weight")
-      TinyNN.tnn_gguf_copy_to_persistent(handle, o_idx,    sess, blk_f.t_w_o)
-      TinyNN.tnn_gguf_copy_to_persistent(handle, gate_idx, sess, blk_f.t_w_gate)
-      TinyNN.tnn_gguf_copy_to_persistent(handle, up_idx,   sess, blk_f.t_w_up)
-      TinyNN.tnn_gguf_copy_to_persistent(handle, down_idx, sess, blk_f.t_w_down)
+      if use_verbatim
+        TinyNN.tnn_gguf_copy_verbatim_to_persistent(handle, o_idx,    sess, blk_f.t_w_o)
+        TinyNN.tnn_gguf_copy_verbatim_to_persistent(handle, gate_idx, sess, blk_f.t_w_gate)
+        TinyNN.tnn_gguf_copy_verbatim_to_persistent(handle, up_idx,   sess, blk_f.t_w_up)
+        TinyNN.tnn_gguf_copy_verbatim_to_persistent(handle, down_idx, sess, blk_f.t_w_down)
+      else
+        TinyNN.tnn_gguf_copy_to_persistent(handle, o_idx,    sess, blk_f.t_w_o)
+        TinyNN.tnn_gguf_copy_to_persistent(handle, gate_idx, sess, blk_f.t_w_gate)
+        TinyNN.tnn_gguf_copy_to_persistent(handle, up_idx,   sess, blk_f.t_w_up)
+        TinyNN.tnn_gguf_copy_to_persistent(handle, down_idx, sess, blk_f.t_w_down)
+      end
 
       li = li + 1
     end
@@ -379,6 +409,26 @@ module GGUFLoad
 
     TinyNN.tnn_gguf_free(handle)
     true
+  end
+
+  # Detect the GGUF's 2D linear weight type. Peeks at
+  # blk.0.attn_q.weight (always present for llama-family models).
+  # Returns the ggml type integer (0=F32, 8=Q8_0). Callers should
+  # pass this to kv.set_weight_type before kv.realize_for to enable
+  # the Q8-stays-Q8 path.
+  def self.detect_weight_type(path)
+    handle = TinyNN.tnn_gguf_load(path)
+    if handle == nil
+      return 0
+    end
+    idx = TinyNN.tnn_gguf_find_index(handle, "blk.0.attn_q.weight")
+    t   = if idx >= 0
+            TinyNN.tnn_gguf_tensor_type(handle, idx)
+          else
+            0
+          end
+    TinyNN.tnn_gguf_free(handle)
+    t
   end
 
   # Auto-dispatcher: peek at the toy.ggml_native metadata key and pick

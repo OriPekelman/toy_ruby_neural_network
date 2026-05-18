@@ -34,6 +34,10 @@ void  *tnn_input_2d_f32(void *sess, int rows, int cols);
  * sched_reset cycles — use for parameters, optimizer moments, anything
  * that should live on the device between training steps. */
 void  *tnn_input_2d_f32_persistent(void *sess, int rows, int cols);
+/* Same shape as the f32 persistent allocator but with a caller-chosen
+ * ggml type (e.g. GGML_TYPE_Q8_0 = 8). Used by Phase 3 of the
+ * memory-design plan: keep quantized weights quantized in memory. */
+void  *tnn_input_2d_persistent_typed(void *sess, int rows, int cols, int ggml_type);
 void  *tnn_input_1d_f32_persistent(void *sess, int n);
 
 /* Allocate the backend buffer for all persistent tensors. Call once,

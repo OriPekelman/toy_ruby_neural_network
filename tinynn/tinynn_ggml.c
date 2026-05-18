@@ -217,6 +217,23 @@ void *tnn_input_2d_f32_persistent(void *sess, int rows, int cols)
                                        (int64_t)cols, (int64_t)rows);
 }
 
+/* Same shape as tnn_input_2d_f32_persistent but with a caller-chosen
+ * ggml type (e.g. GGML_TYPE_Q8_0 for Q8-stays-Q8 inference). For
+ * block-quantized types the column count (ne0) must be a multiple of
+ * the block size — GGML_BLCK_SIZE handles this. Returns NULL on bad
+ * shape; callers should sanity-check the result. */
+void *tnn_input_2d_persistent_typed(void *sess, int rows, int cols, int ggml_type)
+{
+    if (!sess || rows <= 0 || cols <= 0) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    if (s->weights_finalized) return NULL;
+    enum ggml_type t = (enum ggml_type)ggml_type;
+    int blck = ggml_blck_size(t);
+    if (blck > 1 && (cols % blck != 0)) return NULL;
+    return (void *)ggml_new_tensor_2d(s->ctx_w, t,
+                                       (int64_t)cols, (int64_t)rows);
+}
+
 /* Same as above but 1D — used for the 7-elem adamw_params vector. */
 void *tnn_input_1d_f32_persistent(void *sess, int n)
 {

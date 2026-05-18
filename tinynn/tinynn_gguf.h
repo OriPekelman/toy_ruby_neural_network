@@ -104,6 +104,22 @@ int tnn_gguf_copy_head_slice_to_persistent_native(void *handle, int tensor_idx,
                                                     int head_idx, int n_heads_total,
                                                     int d_model, int d_head);
 
+/* Verbatim (no-dequant) copy: bytes go from the GGUF tensor straight
+ * into the persistent ggml tensor. Caller must pre-allocate the
+ * destination with the same ggml type as the source. Used by Phase 3
+ * (Q8-stays-Q8). The dst type / size must match the GGUF tensor
+ * exactly; checked at runtime. */
+int tnn_gguf_copy_verbatim_to_persistent(void *handle, int tensor_idx,
+                                          void *sess, void *target_tensor);
+
+/* Per-head verbatim slice. Source must be native-layout (head h is
+ * rows [h*d_head, (h+1)*d_head) of an [n_heads_total*d_head, d_model]
+ * tensor). The destination is one per-head tensor; its ggml_nbytes
+ * must equal src_nbytes / n_heads_total. */
+int tnn_gguf_copy_verbatim_head_slice_to_persistent(void *handle, int tensor_idx,
+                                                      void *sess, void *target_tensor,
+                                                      int head_idx, int n_heads_total);
+
 /* Extract one head-slice from a 1-D bias tensor of length
  * (n_heads_total × d_head) and copy it to target_tensor (1-D length
  * d_head). Used for attn_q.bias / attn_k.bias / attn_v.bias in
