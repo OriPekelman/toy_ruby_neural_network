@@ -143,7 +143,25 @@ module TinyNNCuda
   ffi_func :tnn_set_param,        [:ptr],                   :void
   ffi_func :tnn_input_1d_f32,     [:ptr, :int],             :ptr
   ffi_func :tnn_input_2d_f32_persistent, [:ptr, :int, :int],   :ptr
+  ffi_func :tnn_input_2d_persistent_typed, [:ptr, :int, :int, :int], :ptr
   ffi_func :tnn_input_1d_f32_persistent, [:ptr, :int],         :ptr
+  # Phase 2 BYO-pointer mmap (CUDA path: ggml-cuda patched to expose
+  # ggml_backend_cuda_buffer_from_ptr; weight tensors reference
+  # cudaHostRegister'd pages and run via UVA on unified-memory SKUs).
+  ffi_func :tnn_session_attach_weight_mmap, [:ptr, :ptr, :size_t], :int
+  ffi_func :tnn_input_2d_persistent_mmap, [:ptr, :int, :int, :int, :size_t], :ptr
+  ffi_func :tnn_input_1d_persistent_mmap, [:ptr, :int, :int, :size_t], :ptr
+  # GGUF accessors — same C symbols as TinyNN; exposed here so CUDA-
+  # only demos can avoid pulling in lib/tinynn.rb (which drags in extra
+  # CPU-side classes that can trip Spinel's type unifier).
+  ffi_func :tnn_gguf_load,                  [:str],           :ptr
+  ffi_func :tnn_gguf_free,                  [:ptr],           :void
+  ffi_func :tnn_gguf_find_index,            [:ptr, :str],     :int
+  ffi_func :tnn_gguf_tensor_type,           [:ptr, :int],     :int
+  ffi_func :tnn_gguf_get_bool,              [:ptr, :str],     :int
+  ffi_func :tnn_gguf_mmap_base,             [:ptr],           :ptr
+  ffi_func :tnn_gguf_mmap_size,             [:ptr],           :size_t
+  ffi_func :tnn_gguf_tensor_file_offset,    [:ptr, :int],     :size_t
   ffi_func :tnn_finalize_weights, [:ptr],                   :int
   ffi_func :tnn_realize_b,        [:ptr, :ptr],             :int
   ffi_func :tnn_switch_a,         [:ptr],                   :int
@@ -931,4 +949,21 @@ if false
   _aic_tensor = TinyNNCuda.tnn_null_ptr
   _aic_ids    = [0]
   TinyNNCuda.upload_int_array(_aic_sess, _aic_tensor, _aic_ids)
+  # Also pin the literal `indices` name as Array<Int> (same trick as
+  # the CPU anchor) so embed_lookup / embed_back / scratch_set_i32
+  # see int elements when `indices[i]` is evaluated. Without this the
+  # local-name collapse can rewire `indices` to Array<aggregate>
+  # depending on what else is loaded.
+  indices = [0]
+  _aic_table = Mat.new(1, 1)
+  TinyNNCuda.embed_lookup(_aic_table, indices)
+  TinyNNCuda.embed_back(_aic_table, indices, 1)
+  # Pin upload_row_major / upload_transposed as returning int (the
+  # underlying FFI int return). Without a concrete callsite Spinel
+  # may infer aggregate, then the `return` of the FFI call fails to
+  # compile in CUDA-only demos that don't transitively load
+  # toy_smollm2_ffi_kv_cuda.
+  _aic_mat = Mat.new(1, 1)
+  TinyNNCuda.upload_row_major(_aic_sess, _aic_tensor, _aic_mat)
+  TinyNNCuda.upload_transposed(_aic_sess, _aic_tensor, _aic_mat)
 end

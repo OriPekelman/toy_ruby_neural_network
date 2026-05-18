@@ -10,6 +10,7 @@ demos/qwen25_7b_native_q8
 demos/qwen25_direct_native_mmap
 demos/qwen25_direct_native_mmap_q8
 demos/qwen25_7b_native_mmap_q8
+demos/cuda_byo_ptr_smoke
 data/tinyllama_prompt_ids.txt
 data/smollm2_prompt_ids.txt
 
@@ -89,6 +90,7 @@ tinynn/gpt2_bench_cuda
 tinynn/kv_multi_cpy_smoke
 tinynn/bpe_smoke
 tinynn/bpe_debug
+tinynn/cuda_byo_smoke
 tinynn/ab_smoke_silu
 tinynn/ab_smoke_mul
 # But DO track tinynn/README.md (the FFI bridge doc)

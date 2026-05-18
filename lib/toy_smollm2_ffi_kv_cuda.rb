@@ -53,7 +53,11 @@ class SmolLM2KVFFICacheCuda
                 :kv_blocks_ffi,
                 :max_T, :d_model, :d_ff, :n_heads, :n_kv, :d_head,
                 :group_size, :n_layers, :vocab_size, :rope_base,
-                :rms_eps, :realized
+                :rms_eps, :realized,
+                # Stub to satisfy Spinel's type unification with
+                # SmolLM2KVFFICache (which uses weight_type for Phase 3
+                # Q8-stays-Q8). The CUDA path doesn't act on this yet.
+                :weight_type
 
   def initialize
     @realized   = false
@@ -75,6 +79,7 @@ class SmolLM2KVFFICacheCuda
     @has_untied_output  = false
     @has_qkv_bias       = false
     @kv_blocks_ffi      = [SmolLM2KVBlockFFICuda.new]
+    @weight_type        = 0   # stub; CUDA path doesn't act on it yet
   end
 
   # Declare every persistent tensor (weights + K/V buffers) and finalize.

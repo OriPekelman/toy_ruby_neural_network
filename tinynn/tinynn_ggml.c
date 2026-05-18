@@ -18,6 +18,17 @@ __attribute__((weak)) ggml_backend_t tnn_backend_cuda_init_internal(void) {
     return NULL;
 }
 
+/* Weak hook: returns a CUDA-side ggml_backend_cuda_buffer_from_ptr
+ * wrapping the given host region (typically an mmap'd GGUF). The
+ * CPU-only build leaves this NULL; the CUDA archive
+ * (tinynn_backend_cuda.c) overrides with a strong definition that
+ * calls into the patched ggml-cuda. */
+__attribute__((weak)) ggml_backend_buffer_t
+tnn_cuda_buffer_from_ptr_internal(void *host_ptr, size_t size, int device) {
+    (void)host_ptr; (void)size; (void)device;
+    return NULL;
+}
+
 #define TNN_SCRATCH_BYTES (16 * 1024 * 1024)   /* 16 MiB: 4M f32 */
 
 /* Engine: persistent across the program's lifetime. Holds the backend
@@ -276,12 +287,32 @@ int tnn_session_attach_weight_mmap(void *sess, void *base, size_t size)
     if (!sess || !base || size == 0) return -1;
     tnn_session *s = (tnn_session *)sess;
     if (s->weights_buf_mmap) return -1;  /* already attached */
-    /* The cpu_buffer_from_ptr API asserts ptr % TENSOR_ALIGNMENT == 0.
+    /* The buffer_from_ptr APIs assert ptr % TENSOR_ALIGNMENT == 0.
      * mmap returns page-aligned pointers (>= 4 KiB), so a GGUF mmap
-     * always satisfies this. */
-    s->weights_buf_mmap = ggml_backend_cpu_buffer_from_ptr(base, size);
-    if (!s->weights_buf_mmap) return -1;
-    s->weights_map_base = base;
+     * always satisfies this.
+     *
+     * CUDA sessions get the patched ggml_backend_cuda_buffer_from_ptr
+     * (vendored in this repo; see docs/cuda-byo-pointer-design.md).
+     * The host region is cudaHostRegister'd and made device-addressable
+     * via UVA; on GB10 unified memory the device pointer equals the
+     * host pointer and kernels read the mmap'd file pages directly. */
+    int is_cuda = (s->engine && s->engine->backend_name &&
+                    s->engine->backend_name[0] == 'c' &&
+                    s->engine->backend_name[1] == 'u');
+    if (is_cuda) {
+        s->weights_buf_mmap = tnn_cuda_buffer_from_ptr_internal(base, size, 0);
+        if (!s->weights_buf_mmap) return -2;  /* CUDA archive not linked / GPU error */
+    } else {
+        s->weights_buf_mmap = ggml_backend_cpu_buffer_from_ptr(base, size);
+        if (!s->weights_buf_mmap) return -1;
+    }
+    /* Store the buffer's "view" of the base, NOT the raw host pointer.
+     * On CPU these are the same; on CUDA the buffer's base is the
+     * UVA-mapped device pointer (equal to host_ptr on unified-memory
+     * SKUs, different on discrete GPUs). Tensor data pointers are
+     * computed as weights_map_base + offset; using the buffer's base
+     * keeps ggml_backend_tensor_alloc's range-check happy. */
+    s->weights_map_base = ggml_backend_buffer_get_base(s->weights_buf_mmap);
     s->weights_map_size = size;
     return 0;
 }
