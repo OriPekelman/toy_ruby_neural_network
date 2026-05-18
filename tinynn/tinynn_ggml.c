@@ -187,19 +187,19 @@ void *tnn_session_new(int prefer_cuda)
     };
     s->ctx_w = ggml_init(w_params);
 
-    /* Same-sized metadata pool for mmap'd weight tensors. Same upper
-     * bound — only the LARGE 2D linear weights would normally land here;
-     * if Phase 2's caller routes everything mmap-able (token_embed,
-     * norms, biases too), we still stay well under the 16k tensor slot
-     * budget for gpt2-xl-scale models. */
-    s->ctx_w_mmap_buf_size = ggml_tensor_overhead() * 16384;
-    s->ctx_w_mmap_buf = (uint8_t *)calloc(1, s->ctx_w_mmap_buf_size);
-    struct ggml_init_params m_params = {
-        /*.mem_size   =*/ s->ctx_w_mmap_buf_size,
-        /*.mem_buffer =*/ s->ctx_w_mmap_buf,
-        /*.no_alloc   =*/ true,
-    };
-    s->ctx_w_mmap = ggml_init(m_params);
+    /* ctx_w_mmap is created LAZILY (on first tnn_session_attach_weight_mmap
+     * call) rather than at session_new. Eager creation has a CUDA
+     * regression: even an empty no_alloc ggml_context with no
+     * attached backend buffer causes ggml-cuda's scheduler to
+     * produce wrong matmul output for downstream ops on the SAME
+     * session (verified 2026-05-18 — CUDA inference goes from
+     * wrong (top=112919) to correct (top=71 matching CPU) when
+     * this ctx is absent). Lazy creation keeps the BYO-pointer
+     * path working when needed without poisoning sessions that
+     * don't use it. */
+    s->ctx_w_mmap_buf_size = 0;
+    s->ctx_w_mmap_buf      = NULL;
+    s->ctx_w_mmap          = NULL;
 
     s->scratch = (float *)calloc(1, TNN_SCRATCH_BYTES);
     s->realized          = 0;
@@ -282,11 +282,36 @@ void *tnn_input_2d_persistent_typed(void *sess, int rows, int cols, int ggml_typ
  * The session does NOT own the underlying memory — the caller (e.g.
  * a tnn_gguf_session) must keep `base` valid for the session's
  * lifetime. Returns 0 on success, -1 on already-attached / bad args. */
+/* Lazy-create ctx_w_mmap. Called from tnn_session_attach_weight_mmap
+ * (Phase 2 entry point). NOT called from tnn_session_new — see the
+ * note there for why (eager creation breaks CUDA inference). */
+static int ensure_ctx_w_mmap(tnn_session *s)
+{
+    if (s->ctx_w_mmap) return 0;
+    s->ctx_w_mmap_buf_size = ggml_tensor_overhead() * 16384;
+    s->ctx_w_mmap_buf = (uint8_t *)calloc(1, s->ctx_w_mmap_buf_size);
+    if (!s->ctx_w_mmap_buf) return -1;
+    struct ggml_init_params m_params = {
+        /*.mem_size   =*/ s->ctx_w_mmap_buf_size,
+        /*.mem_buffer =*/ s->ctx_w_mmap_buf,
+        /*.no_alloc   =*/ true,
+    };
+    s->ctx_w_mmap = ggml_init(m_params);
+    if (!s->ctx_w_mmap) {
+        free(s->ctx_w_mmap_buf);
+        s->ctx_w_mmap_buf = NULL;
+        s->ctx_w_mmap_buf_size = 0;
+        return -1;
+    }
+    return 0;
+}
+
 int tnn_session_attach_weight_mmap(void *sess, void *base, size_t size)
 {
     if (!sess || !base || size == 0) return -1;
     tnn_session *s = (tnn_session *)sess;
     if (s->weights_buf_mmap) return -1;  /* already attached */
+    if (ensure_ctx_w_mmap(s) != 0) return -1;
     /* The buffer_from_ptr APIs assert ptr % TENSOR_ALIGNMENT == 0.
      * mmap returns page-aligned pointers (>= 4 KiB), so a GGUF mmap
      * always satisfies this.

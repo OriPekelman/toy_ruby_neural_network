@@ -28,3 +28,17 @@ ggml_backend_buffer_t tnn_cuda_buffer_from_ptr_internal(void *host_ptr,
 {
     return ggml_backend_cuda_buffer_from_ptr(host_ptr, size, device);
 }
+
+/* Forcing-reference symbol. Pass `-Wl,-u,tnn_cuda_force_link` to the
+ * linker to force this object (and transitively libggml-cuda.a) to
+ * be pulled in from libtinynn_ggml_cuda.a. Without this, the weak
+ * tnn_backend_cuda_init_internal fallback in tinynn_ggml.c satisfies
+ * the symbol table and the strong overrides here never get linked —
+ * resulting in a "CUDA" binary that silently runs on CPU. */
+void tnn_cuda_force_link(void)
+{
+    /* Reference ggml_backend_cuda_init so the linker also pulls in
+     * libggml-cuda.a. */
+    volatile void *p = (void *)&ggml_backend_cuda_init;
+    (void)p;
+}
