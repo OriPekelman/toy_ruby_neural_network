@@ -95,6 +95,10 @@ tinynn/kv_multi_cpy_smoke
 tinynn/bpe_smoke
 tinynn/bpe_debug
 tinynn/cuda_byo_smoke
+tinynn/cuda_kernel_read_smoke
+tinynn/ab_smoke_rope_ext_cuda
+tinynn/ab_smoke_kv_write_cuda
+tinynn/ab_smoke_soft_max_ext_cuda
 tinynn/ab_smoke_silu
 tinynn/ab_smoke_mul
 # But DO track tinynn/README.md (the FFI bridge doc)
