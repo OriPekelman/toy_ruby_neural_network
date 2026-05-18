@@ -64,6 +64,22 @@ tep_demo/api: tep_demo/inference_api.rb tep_demo/_tep_lib/tep.rb lib/transformer
 tep_demo/openai_api_smollm2: tep_demo/openai_api_smollm2.rb tep_demo/_tep_lib/tep.rb lib/toy_smollm2_ffi_kv.rb lib/toy_smollm2_loader.rb tinynn/libtinynn_ggml.a
 	$(SPINEL) tep_demo/openai_api_smollm2.rb -o tep_demo/openai_api_smollm2
 
+# Larger-size variants of the same API. Per-binary GGUF path because
+# Spinel mistypes env-var-driven constants — copy + sed-edit is the
+# convention. Add new sizes by following the pattern (see
+# tep_demo/openai_api_qwen25_1.5b.rb for the canonical 2-line diff).
+OPENAI_QWEN_SOURCES   = $(wildcard tep_demo/openai_api_qwen25_*.rb)
+OPENAI_QWEN_TARGETS   = $(OPENAI_QWEN_SOURCES:.rb=)
+OPENAI_QWEN_DEPS      = tep_demo/_tep_lib/tep.rb \
+                        lib/toy_smollm2_ffi_kv.rb \
+                        lib/toy_smollm2_loader.rb \
+                        tinynn/libtinynn_ggml.a
+
+openai-qwen-all: $(OPENAI_QWEN_TARGETS)
+
+tep_demo/openai_api_qwen25_%: tep_demo/openai_api_qwen25_%.rb $(OPENAI_QWEN_DEPS)
+	$(SPINEL) $< -o $@
+
 # --- ggml vendor ------------------------------------------------------------
 $(GGML_DIR)/CMakeLists.txt:
 	mkdir -p vendor
