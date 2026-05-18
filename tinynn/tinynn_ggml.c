@@ -88,13 +88,25 @@ typedef struct {
     tnn_engine             *engine;       /* unowned */
     struct ggml_context    *ctx;          /* compute (no_alloc=true) */
     struct ggml_context    *ctx_w;        /* weights  (no_alloc=true until finalized) */
+    struct ggml_context    *ctx_w_mmap;   /* mmap'd weights (no_alloc=true forever;
+                                           * tensors get data via
+                                           * ggml_backend_tensor_alloc against
+                                           * weight_buf_mmap) */
     struct ggml_cgraph     *graph;        /* primary (e.g. forward) */
     struct ggml_cgraph     *graph_b;      /* secondary (e.g. adam_step) */
     uint8_t                *ctx_buf;
     size_t                  ctx_buf_size;
     uint8_t                *ctx_w_buf;
     size_t                  ctx_w_buf_size;
-    ggml_backend_buffer_t   weights_buf;  /* set by tnn_finalize_weights */
+    uint8_t                *ctx_w_mmap_buf;
+    size_t                  ctx_w_mmap_buf_size;
+    ggml_backend_buffer_t   weights_buf;       /* set by tnn_finalize_weights */
+    ggml_backend_buffer_t   weights_buf_mmap;  /* cpu_buffer_from_ptr wrapping
+                                                * a caller-owned mmap region. We
+                                                * free the buffer; we do NOT free
+                                                * the underlying memory. */
+    void                   *weights_map_base;  /* mmap base, caller-owned */
+    size_t                  weights_map_size;
     float                  *scratch;
     int                     realized;
     int                     realized_b;
@@ -164,11 +176,28 @@ void *tnn_session_new(int prefer_cuda)
     };
     s->ctx_w = ggml_init(w_params);
 
+    /* Same-sized metadata pool for mmap'd weight tensors. Same upper
+     * bound — only the LARGE 2D linear weights would normally land here;
+     * if Phase 2's caller routes everything mmap-able (token_embed,
+     * norms, biases too), we still stay well under the 16k tensor slot
+     * budget for gpt2-xl-scale models. */
+    s->ctx_w_mmap_buf_size = ggml_tensor_overhead() * 16384;
+    s->ctx_w_mmap_buf = (uint8_t *)calloc(1, s->ctx_w_mmap_buf_size);
+    struct ggml_init_params m_params = {
+        /*.mem_size   =*/ s->ctx_w_mmap_buf_size,
+        /*.mem_buffer =*/ s->ctx_w_mmap_buf,
+        /*.no_alloc   =*/ true,
+    };
+    s->ctx_w_mmap = ggml_init(m_params);
+
     s->scratch = (float *)calloc(1, TNN_SCRATCH_BYTES);
     s->realized          = 0;
     s->realized_b        = 0;
     s->weights_finalized = 0;
     s->weights_buf       = NULL;
+    s->weights_buf_mmap  = NULL;
+    s->weights_map_base  = NULL;
+    s->weights_map_size  = 0;
     s->last_graph        = 0;
     return (void *)s;
 }
@@ -177,11 +206,14 @@ void tnn_session_free(void *sess)
 {
     if (!sess) return;
     tnn_session *s = (tnn_session *)sess;
-    if (s->weights_buf) ggml_backend_buffer_free(s->weights_buf);
-    if (s->ctx)   ggml_free(s->ctx);
-    if (s->ctx_w) ggml_free(s->ctx_w);
+    if (s->weights_buf)      ggml_backend_buffer_free(s->weights_buf);
+    if (s->weights_buf_mmap) ggml_backend_buffer_free(s->weights_buf_mmap);
+    if (s->ctx)        ggml_free(s->ctx);
+    if (s->ctx_w)      ggml_free(s->ctx_w);
+    if (s->ctx_w_mmap) ggml_free(s->ctx_w_mmap);
     free(s->ctx_buf);
     free(s->ctx_w_buf);
+    free(s->ctx_w_mmap_buf);
     free(s->scratch);
     free(s);
     /* Engine + sched are cached globally; do not free here. */
@@ -232,6 +264,82 @@ void *tnn_input_2d_persistent_typed(void *sess, int rows, int cols, int ggml_typ
     if (blck > 1 && (cols % blck != 0)) return NULL;
     return (void *)ggml_new_tensor_2d(s->ctx_w, t,
                                        (int64_t)cols, (int64_t)rows);
+}
+
+/* Phase 2 BYO-pointer: register an mmap'd region as the backing
+ * buffer for weight tensors created via tnn_input_*_persistent_mmap.
+ * The session does NOT own the underlying memory — the caller (e.g.
+ * a tnn_gguf_session) must keep `base` valid for the session's
+ * lifetime. Returns 0 on success, -1 on already-attached / bad args. */
+int tnn_session_attach_weight_mmap(void *sess, void *base, size_t size)
+{
+    if (!sess || !base || size == 0) return -1;
+    tnn_session *s = (tnn_session *)sess;
+    if (s->weights_buf_mmap) return -1;  /* already attached */
+    /* The cpu_buffer_from_ptr API asserts ptr % TENSOR_ALIGNMENT == 0.
+     * mmap returns page-aligned pointers (>= 4 KiB), so a GGUF mmap
+     * always satisfies this. */
+    s->weights_buf_mmap = ggml_backend_cpu_buffer_from_ptr(base, size);
+    if (!s->weights_buf_mmap) return -1;
+    s->weights_map_base = base;
+    s->weights_map_size = size;
+    return 0;
+}
+
+/* Allocate a 2D persistent tensor in ctx_w_mmap whose `data` points
+ * at `base + buf_offset` in the attached mmap region. The tensor's
+ * `buffer` is set so the scheduler treats it as already-resident.
+ * Returns NULL on bad args or out-of-range offset.
+ *
+ * For block-quantized types, `cols` (ne0) must be a multiple of the
+ * type's block size and `buf_offset` must land on a 32-byte boundary
+ * (GGUF guarantees this).
+ *
+ * Caller computes buf_offset as
+ *   gguf_get_data_offset(gguf_ctx) + gguf_get_tensor_offset(gguf_ctx, idx).
+ */
+void *tnn_input_2d_persistent_mmap(void *sess, int rows, int cols,
+                                    int ggml_type, size_t buf_offset)
+{
+    if (!sess || rows <= 0 || cols <= 0) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    if (!s->weights_buf_mmap || !s->weights_map_base) return NULL;
+    enum ggml_type t = (enum ggml_type)ggml_type;
+    int blck = ggml_blck_size(t);
+    if (blck > 1 && (cols % blck != 0)) return NULL;
+    if (buf_offset >= s->weights_map_size) return NULL;
+
+    struct ggml_tensor *tensor = ggml_new_tensor_2d(s->ctx_w_mmap, t,
+                                                    (int64_t)cols,
+                                                    (int64_t)rows);
+    if (!tensor) return NULL;
+
+    void *addr = (char *)s->weights_map_base + buf_offset;
+    enum ggml_status st = ggml_backend_tensor_alloc(s->weights_buf_mmap,
+                                                     tensor, addr);
+    if (st != GGML_STATUS_SUCCESS) return NULL;
+    return (void *)tensor;
+}
+
+/* 1D variant for norms / biases — same semantics. */
+void *tnn_input_1d_persistent_mmap(void *sess, int n, int ggml_type,
+                                    size_t buf_offset)
+{
+    if (!sess || n <= 0) return NULL;
+    tnn_session *s = (tnn_session *)sess;
+    if (!s->weights_buf_mmap || !s->weights_map_base) return NULL;
+    enum ggml_type t = (enum ggml_type)ggml_type;
+    if (buf_offset >= s->weights_map_size) return NULL;
+
+    struct ggml_tensor *tensor = ggml_new_tensor_1d(s->ctx_w_mmap, t,
+                                                    (int64_t)n);
+    if (!tensor) return NULL;
+
+    void *addr = (char *)s->weights_map_base + buf_offset;
+    enum ggml_status st = ggml_backend_tensor_alloc(s->weights_buf_mmap,
+                                                     tensor, addr);
+    if (st != GGML_STATUS_SUCCESS) return NULL;
+    return (void *)tensor;
 }
 
 /* Same as above but 1D — used for the 7-elem adamw_params vector. */

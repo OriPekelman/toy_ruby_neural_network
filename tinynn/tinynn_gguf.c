@@ -211,6 +211,34 @@ double tnn_gguf_get_f32(void *handle, const char *key)
     return (double)gguf_get_val_f32(s->gguf_ctx, kid);
 }
 
+/* Phase 2 BYO-pointer accessors: expose the mmap base + size + per-
+ * tensor file offsets so callers can wire weight tensors to point at
+ * mmap'd file pages via tnn_session_attach_weight_mmap +
+ * tnn_input_*_persistent_mmap. */
+void *tnn_gguf_mmap_base(void *handle)
+{
+    if (!handle) return NULL;
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    return s->map;
+}
+
+size_t tnn_gguf_mmap_size(void *handle)
+{
+    if (!handle) return 0;
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    return s->map_size;
+}
+
+/* Absolute byte offset (from mmap base) where tensor `i`'s data
+ * starts. Combines the file's data-section offset with the per-tensor
+ * offset within that section. */
+size_t tnn_gguf_tensor_file_offset(void *handle, int i)
+{
+    if (!handle) return 0;
+    tnn_gguf_session *s = (tnn_gguf_session *)handle;
+    return s->data_offset + gguf_get_tensor_offset(s->gguf_ctx, (int64_t)i);
+}
+
 /* Bool metadata. Returns 1 if key is present and true, 0 if false or
  * missing. */
 int tnn_gguf_get_bool(void *handle, const char *key)

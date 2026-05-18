@@ -39,6 +39,12 @@ int    tnn_gguf_get_u32(void *handle, const char *key);
 double tnn_gguf_get_f32(void *handle, const char *key);
 int    tnn_gguf_get_bool(void *handle, const char *key);
 
+/* Phase 2 BYO-pointer mmap accessors. Used to wire weight tensors to
+ * point at file pages via tnn_session_attach_weight_mmap. */
+void  *tnn_gguf_mmap_base(void *handle);
+size_t tnn_gguf_mmap_size(void *handle);
+size_t tnn_gguf_tensor_file_offset(void *handle, int i);
+
 /* Create a tiny GGUF file at `path` with one 2x3 f32 tensor named
  * "demo.tensor" containing [1.0, 2.0, ..., 6.0]. Useful for the
  * smoke test to exercise the full load path without needing a

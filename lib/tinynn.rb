@@ -384,6 +384,12 @@ module TinyNN
   ffi_func :tnn_input_1d_f32,     [:ptr, :int],             :ptr
   ffi_func :tnn_input_2d_f32_persistent, [:ptr, :int, :int],   :ptr
   ffi_func :tnn_input_2d_persistent_typed, [:ptr, :int, :int, :int], :ptr
+  # Phase 2 BYO-pointer: attach an mmap'd region as the source of
+  # weight bytes, then allocate persistent tensors that point at
+  # offsets inside it (no copy).
+  ffi_func :tnn_session_attach_weight_mmap, [:ptr, :ptr, :size_t], :int
+  ffi_func :tnn_input_2d_persistent_mmap, [:ptr, :int, :int, :int, :size_t], :ptr
+  ffi_func :tnn_input_1d_persistent_mmap, [:ptr, :int, :int, :size_t], :ptr
   ffi_func :tnn_input_1d_f32_persistent, [:ptr, :int],         :ptr
   ffi_func :tnn_finalize_weights, [:ptr],                   :int
   ffi_func :tnn_realize_b,        [:ptr, :ptr],             :int
@@ -408,6 +414,9 @@ module TinyNN
   ffi_func :tnn_gguf_get_u32,               [:ptr, :str],     :int
   ffi_func :tnn_gguf_get_f32,               [:ptr, :str],     :double
   ffi_func :tnn_gguf_get_bool,              [:ptr, :str],     :int
+  ffi_func :tnn_gguf_mmap_base,             [:ptr],           :ptr
+  ffi_func :tnn_gguf_mmap_size,             [:ptr],           :size_t
+  ffi_func :tnn_gguf_tensor_file_offset,    [:ptr, :int],     :size_t
   ffi_func :tnn_gguf_write_demo_file,       [:str],           :int
   # Direct GGUF→FFI persistent loaders (see tinynn/tinynn_gguf.h).
   # These skip the Ruby Float64 Mat intermediate, dropping per-weight

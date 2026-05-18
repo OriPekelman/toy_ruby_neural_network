@@ -59,7 +59,8 @@ class SmolLM2KVFFICache
                 # 0 = GGML_TYPE_F32 (legacy). 8 = GGML_TYPE_Q8_0. Set
                 # via #set_weight_type before #realize_for to keep
                 # quantized weights quantized in memory.
-                :weight_type
+                :weight_type,
+                :gguf_handle_keepalive
 
   def initialize
     @realized   = false
@@ -93,7 +94,8 @@ class SmolLM2KVFFICache
     @trace_names.pop
     @trace_tensors = [TinyNN.tnn_null_ptr]
     @trace_tensors.pop
-    @weight_type   = 0   # GGML_TYPE_F32; legacy default
+    @weight_type   = 0                # GGML_TYPE_F32; legacy default
+    @gguf_handle_keepalive = TinyNN.tnn_null_ptr  # set by realize_for_mmap
   end
 
   # Phase 3 opt-in: set the ggml type used for 2D linear weights when
@@ -113,6 +115,221 @@ class SmolLM2KVFFICache
       TinyNN.tnn_input_2d_f32_persistent(@sess, rows, cols)
     else
       TinyNN.tnn_input_2d_persistent_typed(@sess, rows, cols, @weight_type)
+    end
+  end
+
+  # Phase 2 BYO-pointer realization. Like realize_for but every
+  # GGUF-resident tensor (token_embed, norms, biases, all 2D linears,
+  # untied output) is allocated to POINT AT the file's mmap'd pages
+  # rather than copied into a backend buffer. Only K/V cache and the
+  # compute scratch live in backend-allocated memory. The kv_cache
+  # holds the GGUF handle so the mmap stays alive for its lifetime.
+  #
+  # Caller flow:
+  #   gguf  = TinyNN.tnn_gguf_load(path)        # mmap'd, no_alloc
+  #   flags = GGUFLoad.detect_smollm2_flags(path)
+  #   wtype = GGUFLoad.detect_weight_type(path)
+  #   kv = SmolLM2KVFFICache.new
+  #   kv.realize_for_mmap(gguf, cfg, MAX_T, flags.untied, flags.qkv_bias)
+  #   # weights are already in place; no load_weights call needed.
+  def realize_for_mmap(gguf_handle, cfg, max_T, untied, qkv_bias)
+    @max_T      = max_T
+    @d_model    = cfg.d_model
+    @d_ff       = cfg.d_ff
+    @n_heads    = cfg.n_heads
+    @n_kv       = cfg.n_kv
+    @d_head     = cfg.d_model / cfg.n_heads
+    @group_size = cfg.n_heads / cfg.n_kv
+    @n_layers   = cfg.n_layers
+    @vocab_size = cfg.vocab
+    @rope_base  = cfg.rope_base
+    @rms_eps    = cfg.rms_eps
+
+    @gguf_handle_keepalive = gguf_handle   # prevent GC; mmap must outlive @sess
+    @sess              = TinyNN.tnn_session_new(0)
+    @has_untied_output = untied
+    @has_qkv_bias      = qkv_bias
+
+    # Wire the GGUF's mmap region into the session as the source of
+    # weight bytes. Subsequent tnn_input_*_persistent_mmap calls
+    # allocate tensors with .data inside this region — no copy.
+    map_base = TinyNN.tnn_gguf_mmap_base(gguf_handle)
+    map_size = TinyNN.tnn_gguf_mmap_size(gguf_handle)
+    TinyNN.tnn_session_attach_weight_mmap(@sess, map_base, map_size)
+
+    # Globals — embeddings + final norm + optional untied output.
+    eidx = TinyNN.tnn_gguf_find_index(gguf_handle, "token_embd.weight")
+    eoff = TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, eidx)
+    etyp = TinyNN.tnn_gguf_tensor_type(gguf_handle, eidx)
+    @t_token_embed = TinyNN.tnn_input_2d_persistent_mmap(@sess,
+                       @vocab_size, @d_model, etyp, eoff)
+
+    fnidx = TinyNN.tnn_gguf_find_index(gguf_handle, "output_norm.weight")
+    fnoff = TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, fnidx)
+    @t_final_norm_gamma = TinyNN.tnn_input_1d_persistent_mmap(@sess,
+                            @d_model, 0, fnoff)   # 0 = GGML_TYPE_F32
+
+    if untied
+      oidx = TinyNN.tnn_gguf_find_index(gguf_handle, "output.weight")
+      ooff = TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, oidx)
+      otyp = TinyNN.tnn_gguf_tensor_type(gguf_handle, oidx)
+      @t_output = TinyNN.tnn_input_2d_persistent_mmap(@sess,
+                    @vocab_size, @d_model, otyp, ooff)
+    end
+
+    @kv_blocks_ffi = [SmolLM2KVBlockFFI.new]
+    li = 1
+    while li < @n_layers
+      @kv_blocks_ffi.push(SmolLM2KVBlockFFI.new)
+      li = li + 1
+    end
+
+    li = 0
+    while li < @n_layers
+      blk = @kv_blocks_ffi[li]
+      prefix = "blk." + li.to_s
+
+      # Norms — 1D F32 mmap'd directly.
+      rn1_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".attn_norm.weight")
+      rn2_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".ffn_norm.weight")
+      blk.t_rn1_gamma = TinyNN.tnn_input_1d_persistent_mmap(@sess, @d_model, 0,
+                          TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, rn1_idx))
+      blk.t_rn2_gamma = TinyNN.tnn_input_1d_persistent_mmap(@sess, @d_model, 0,
+                          TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, rn2_idx))
+
+      # Q per-head — each head is a contiguous slice of the full
+      # [n_heads*d_head, d_model] tensor in HF-native row-major.
+      q_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".attn_q.weight")
+      q_off_base = TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, q_idx)
+      q_type     = TinyNN.tnn_gguf_tensor_type(gguf_handle, q_idx)
+      q_stride   = head_nbytes(q_type, @d_head, @d_model)
+      blk.t_w_q = [TinyNN.tnn_input_2d_persistent_mmap(@sess,
+                     @d_head, @d_model, q_type, q_off_base)]
+      hq = 1
+      while hq < @n_heads
+        blk.t_w_q.push(TinyNN.tnn_input_2d_persistent_mmap(@sess,
+                         @d_head, @d_model, q_type,
+                         q_off_base + hq * q_stride))
+        hq = hq + 1
+      end
+
+      # K, V per-kv-head — same slicing math.
+      k_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".attn_k.weight")
+      v_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".attn_v.weight")
+      k_off_base = TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, k_idx)
+      v_off_base = TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, v_idx)
+      k_type     = TinyNN.tnn_gguf_tensor_type(gguf_handle, k_idx)
+      v_type     = TinyNN.tnn_gguf_tensor_type(gguf_handle, v_idx)
+      k_stride   = head_nbytes(k_type, @d_head, @d_model)
+      v_stride   = head_nbytes(v_type, @d_head, @d_model)
+      blk.t_w_k = [TinyNN.tnn_input_2d_persistent_mmap(@sess,
+                     @d_head, @d_model, k_type, k_off_base)]
+      blk.t_w_v = [TinyNN.tnn_input_2d_persistent_mmap(@sess,
+                     @d_head, @d_model, v_type, v_off_base)]
+      blk.t_K   = [TinyNN.tnn_input_2d_f32_persistent(@sess, max_T,  @d_head)]
+      blk.t_V   = [TinyNN.tnn_input_2d_f32_persistent(@sess, @d_head, max_T)]
+      hkv = 1
+      while hkv < @n_kv
+        blk.t_w_k.push(TinyNN.tnn_input_2d_persistent_mmap(@sess,
+                         @d_head, @d_model, k_type,
+                         k_off_base + hkv * k_stride))
+        blk.t_w_v.push(TinyNN.tnn_input_2d_persistent_mmap(@sess,
+                         @d_head, @d_model, v_type,
+                         v_off_base + hkv * v_stride))
+        blk.t_K.push(TinyNN.tnn_input_2d_f32_persistent(@sess, max_T,  @d_head))
+        blk.t_V.push(TinyNN.tnn_input_2d_f32_persistent(@sess, @d_head, max_T))
+        hkv = hkv + 1
+      end
+
+      # Q/K/V biases — 1D F32 per head, contiguous in the file.
+      if qkv_bias
+        qb_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".attn_q.bias")
+        kb_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".attn_k.bias")
+        vb_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".attn_v.bias")
+        qb_off = TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, qb_idx)
+        kb_off = TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, kb_idx)
+        vb_off = TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, vb_idx)
+        bias_stride = @d_head * 4  # f32
+
+        blk.t_b_q = [TinyNN.tnn_input_1d_persistent_mmap(@sess, @d_head, 0, qb_off)]
+        hq = 1
+        while hq < @n_heads
+          blk.t_b_q.push(TinyNN.tnn_input_1d_persistent_mmap(@sess, @d_head, 0,
+                           qb_off + hq * bias_stride))
+          hq = hq + 1
+        end
+
+        blk.t_b_k = [TinyNN.tnn_input_1d_persistent_mmap(@sess, @d_head, 0, kb_off)]
+        blk.t_b_v = [TinyNN.tnn_input_1d_persistent_mmap(@sess, @d_head, 0, vb_off)]
+        hkv = 1
+        while hkv < @n_kv
+          blk.t_b_k.push(TinyNN.tnn_input_1d_persistent_mmap(@sess, @d_head, 0,
+                           kb_off + hkv * bias_stride))
+          blk.t_b_v.push(TinyNN.tnn_input_1d_persistent_mmap(@sess, @d_head, 0,
+                           vb_off + hkv * bias_stride))
+          hkv = hkv + 1
+        end
+      end
+
+      # O / FFN — full 2D weights, no per-head slicing.
+      o_idx    = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".attn_output.weight")
+      gate_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".ffn_gate.weight")
+      up_idx   = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".ffn_up.weight")
+      down_idx = TinyNN.tnn_gguf_find_index(gguf_handle, prefix + ".ffn_down.weight")
+      blk.t_w_o    = TinyNN.tnn_input_2d_persistent_mmap(@sess, @d_model, @d_model,
+                       TinyNN.tnn_gguf_tensor_type(gguf_handle, o_idx),
+                       TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, o_idx))
+      blk.t_w_gate = TinyNN.tnn_input_2d_persistent_mmap(@sess, @d_ff, @d_model,
+                       TinyNN.tnn_gguf_tensor_type(gguf_handle, gate_idx),
+                       TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, gate_idx))
+      blk.t_w_up   = TinyNN.tnn_input_2d_persistent_mmap(@sess, @d_ff, @d_model,
+                       TinyNN.tnn_gguf_tensor_type(gguf_handle, up_idx),
+                       TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, up_idx))
+      blk.t_w_down = TinyNN.tnn_input_2d_persistent_mmap(@sess, @d_model, @d_ff,
+                       TinyNN.tnn_gguf_tensor_type(gguf_handle, down_idx),
+                       TinyNN.tnn_gguf_tensor_file_offset(gguf_handle, down_idx))
+
+      li = li + 1
+    end
+
+    # Finalize the regular persistent context (K/V cache buffers).
+    # Mmap'd tensors don't need finalization — they were allocated
+    # against weights_buf_mmap inline.
+    TinyNN.tnn_finalize_weights(@sess)
+
+    # Zero-init K/V cache buffers (same as realize_for + legacy load).
+    kv_zero_k = Mat.new(max_T, @d_head)
+    kv_zero_v = Mat.new(@d_head, max_T)
+    li = 0
+    while li < @n_layers
+      blk_f = @kv_blocks_ffi[li]
+      hkv = 0
+      while hkv < @n_kv
+        TinyNN.upload_row_major(@sess, blk_f.t_K[hkv], kv_zero_k)
+        TinyNN.upload_row_major(@sess, blk_f.t_V[hkv], kv_zero_v)
+        hkv = hkv + 1
+      end
+      li = li + 1
+    end
+
+    @realized = true
+  end
+
+  # Per-head byte stride for slicing a full [n_heads*d_head, d_model]
+  # tensor into n_heads contiguous Dh×D blocks. Matches ggml_nbytes()
+  # of a per-head ne=[d_model, d_head] tensor of `ggml_type`.
+  def head_nbytes(ggml_type, d_head, d_model)
+    if ggml_type == 0
+      # F32: d_head * d_model * 4
+      d_head * d_model * 4
+    elsif ggml_type == 8
+      # Q8_0: blocks of 32 elements stored as (half + 32 int8) = 34 bytes.
+      # Per-head has d_head rows of d_model elements each.
+      # bytes = d_head * (d_model / 32) * 34
+      d_head * (d_model / 32) * 34
+    else
+      # Unknown: refuse rather than guess.
+      0
     end
   end
 

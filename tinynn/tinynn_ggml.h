@@ -40,6 +40,18 @@ void  *tnn_input_2d_f32_persistent(void *sess, int rows, int cols);
 void  *tnn_input_2d_persistent_typed(void *sess, int rows, int cols, int ggml_type);
 void  *tnn_input_1d_f32_persistent(void *sess, int n);
 
+/* Phase 2 BYO-pointer: attach an mmap'd file region to the session.
+ * Subsequent calls to tnn_input_*_persistent_mmap allocate tensors
+ * whose `data` lives at byte offsets inside this region. The session
+ * does NOT own the memory — caller (typically a tnn_gguf_session) is
+ * responsible for keeping it valid for the session's lifetime.
+ * Returns 0 on success. */
+int    tnn_session_attach_weight_mmap(void *sess, void *base, size_t size);
+void  *tnn_input_2d_persistent_mmap(void *sess, int rows, int cols,
+                                     int ggml_type, size_t buf_offset);
+void  *tnn_input_1d_persistent_mmap(void *sess, int n, int ggml_type,
+                                     size_t buf_offset);
+
 /* Allocate the backend buffer for all persistent tensors. Call once,
  * after declaring persistent tensors and before any tnn_realize. */
 int    tnn_finalize_weights(void *sess);
