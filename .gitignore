@@ -13,6 +13,8 @@ demos/qwen25_7b_native_mmap_q8
 demos/cuda_byo_ptr_smoke
 demos/qwen25_1.5b_native_mmap
 demos/qwen25_direct_native_mmap_cuda
+demos/qwen25_direct_cuda_standard
+tinynn/cuda_kernel_read_smoke
 data/tinyllama_prompt_ids.txt
 data/smollm2_prompt_ids.txt
 
