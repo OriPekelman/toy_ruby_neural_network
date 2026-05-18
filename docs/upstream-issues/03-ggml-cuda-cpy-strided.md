@@ -103,12 +103,43 @@ same inputs.
   because they don't use the `view_2d + cpy` idiom for KV writes
   in the same way (or their V layout produces a contiguous slot).
 
-### Suggested fix
+### Root cause + fix
 
-ggml-cuda's `cpy_f32_f32` (and friends) kernel needs to honor the
-destination tensor's nb1 (and nb2/nb3 for higher rank) when
-writing. Probably analogous to how cuBLAS / cudaMemcpy2DAsync
-handle strided destinations.
+The `cpy_scalar` kernel actually *does* honor `nb10..nb13` correctly.
+The bug is in the dispatch: `ggml_cuda_cpy` enables
+`cpy_scalar_transpose` whenever `src` looks like a "compact
+transpose" (`nb01 == elt_size`, `nb02 == ne00*ne01*elt_size`) without
+checking the destination layout. The transpose kernel indexes `dst`
+as `imat*n + (ty+j)*ne00 + tx` — a contiguous write that ignores
+`nb1` on `dst`.
+
+For the V-cache pattern, `src` (the matmul result, ne=[1, d_head],
+nb=[4, 4]) trivially satisfies the transpose conditions, so the
+kernel is selected; `dst` is the strided slot, so its bytes get
+packed contiguously instead of distributed across rows.
+
+Minimal fix — also require `ggml_is_contiguous(src1)`:
+
+```diff
+ const bool contiguous_srcs = ggml_is_contiguous(src0) && ggml_is_contiguous(src1);
++// cpy_scalar_transpose writes dst contiguously (no nb1[i] strides) — it
++// is only correct when dst itself is contiguous.
+ const bool can_be_transposed = nb01 == (int64_t)ggml_element_size(src0) &&
+-    src0->ne[3] == 1 && nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0);
++    src0->ne[3] == 1 && nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0) &&
++    ggml_is_contiguous(src1);
+```
+
+Falls back to the general `cpy_scalar` kernel which correctly uses
+`nb10/nb11/nb12/nb13`. Verified on GB10 / CUDA 13.0:
+
+- The reproducer above now produces CPU-equivalent output.
+- All 16 op-level CUDA parity tests still pass.
+- Full Qwen2.5-1.5B inference on CUDA now agrees with CPU
+  bit-by-bit at every layer N ∈ {1, 2, 4, 8, 16, 28}.
+
+Alternative: have `cpy_scalar_transpose` honor `nb1[i]` on the
+destination. Heavier change; the guard above is the minimal fix.
 
 ### Related
 
