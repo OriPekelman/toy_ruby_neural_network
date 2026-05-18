@@ -162,6 +162,9 @@ module TinyNNCuda
   ffi_func :tnn_gguf_mmap_base,             [:ptr],           :ptr
   ffi_func :tnn_gguf_mmap_size,             [:ptr],           :size_t
   ffi_func :tnn_gguf_tensor_file_offset,    [:ptr, :int],     :size_t
+  ffi_func :tnn_gguf_copy_to_persistent,            [:ptr, :int, :ptr, :ptr], :int
+  ffi_func :tnn_gguf_copy_head_slice_to_persistent_native,
+           [:ptr, :int, :ptr, :ptr, :int, :int, :int, :int], :int
   ffi_func :tnn_finalize_weights, [:ptr],                   :int
   ffi_func :tnn_realize_b,        [:ptr, :ptr],             :int
   ffi_func :tnn_switch_a,         [:ptr],                   :int

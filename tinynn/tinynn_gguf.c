@@ -48,7 +48,13 @@ void *tnn_gguf_load(const char *path)
     }
     /* Hint the kernel that we'll touch most pages once. Keeps the
      * page-cache footprint friendlier under memory pressure. */
-    madvise(map, fsize, MADV_RANDOM);
+    /* MADV_WILLNEED: ask the kernel to read ahead. Required for the
+     * CUDA-side cudaMemcpyAsync H→D path — it doesn't reliably
+     * page-fault file-backed mmap pages on read, producing wrong
+     * bytes in the device buffer if pages aren't already resident.
+     * (Hypothesis under test 2026-05-18. Was MADV_RANDOM, which
+     * told the kernel NOT to read ahead.) */
+    madvise(map, fsize, MADV_WILLNEED);
 
     tnn_gguf_session *s = (tnn_gguf_session *)calloc(1, sizeof(*s));
     if (!s) {
@@ -372,7 +378,6 @@ int tnn_gguf_find_index(void *handle, const char *name)
 int tnn_gguf_copy_to_persistent(void *handle, int tensor_idx,
                                  void *sess, void *target_tensor)
 {
-    (void)sess;  /* unused: ggml_backend_tensor_set works without scratch */
     if (!handle || !target_tensor || tensor_idx < 0) return -1;
     tnn_gguf_session *s = (tnn_gguf_session *)handle;
     struct ggml_tensor *dst = (struct ggml_tensor *)target_tensor;
@@ -383,7 +388,21 @@ int tnn_gguf_copy_to_persistent(void *handle, int tensor_idx,
     const float *src = gguf_tensor_as_f32(s, tensor_idx, dst_n, &owned, &err);
     if (!src) return err;
 
-    ggml_backend_tensor_set(dst, src, 0, dst_n * sizeof(float));
+    /* Stage through anonymous heap when src is the mmap region
+     * (CUDA's cudaMemcpyAsync H→D from file-backed mmap produces
+     * wrong bytes in the device buffer; calloc'd memory works). */
+    if (!owned) {
+        size_t bytes = dst_n * sizeof(float);
+        float *tmp = (float *)malloc(bytes);
+        if (!tmp) return -6;
+        memcpy(tmp, src, bytes);
+        ggml_backend_tensor_set(dst, tmp, 0, bytes);
+        free(tmp);
+    } else {
+        ggml_backend_tensor_set(dst, src, 0, dst_n * sizeof(float));
+    }
+    (void)sess;
+
     free(owned);
     return 0;
 }
@@ -562,7 +581,18 @@ int tnn_gguf_copy_head_slice_to_persistent_native(void *handle, int tensor_idx,
 
     size_t head_floats = (size_t)d_head * (size_t)d_model;
     size_t head_off    = (size_t)head_idx * head_floats;
-    ggml_backend_tensor_set(dst, src + head_off, 0, head_floats * sizeof(float));
+    size_t bytes = head_floats * sizeof(float);
+
+    /* Same staging as tnn_gguf_copy_to_persistent. */
+    if (!owned) {
+        float *tmp = (float *)malloc(bytes);
+        if (!tmp) { free(owned); return -6; }
+        memcpy(tmp, src + head_off, bytes);
+        ggml_backend_tensor_set(dst, tmp, 0, bytes);
+        free(tmp);
+    } else {
+        ggml_backend_tensor_set(dst, src + head_off, 0, bytes);
+    }
     free(owned);
     return 0;
 }

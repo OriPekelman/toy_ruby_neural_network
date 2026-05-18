@@ -101,6 +101,8 @@ tinynn/ab_smoke_kv_write_cuda
 tinynn/ab_smoke_soft_max_ext_cuda
 tinynn/ab_smoke_matmul_view_cuda
 tinynn/ab_smoke_mmap_matmul_cuda
+tinynn/ab_smoke_cuda_buffer_readback
+demos/qwen25_direct_cuda_native_copy
 tinynn/ab_smoke_silu
 tinynn/ab_smoke_mul
 # But DO track tinynn/README.md (the FFI bridge doc)
