@@ -103,6 +103,9 @@ tinynn/ab_smoke_matmul_view_cuda
 tinynn/ab_smoke_mmap_matmul_cuda
 tinynn/ab_smoke_cuda_buffer_readback
 demos/qwen25_direct_cuda_native_copy
+demos/qwen25_per_layer_cpu
+demos/qwen25_per_layer_cuda
+demos/qwen25_per_layer_divergence
 tinynn/ab_smoke_silu
 tinynn/ab_smoke_mul
 # But DO track tinynn/README.md (the FFI bridge doc)
